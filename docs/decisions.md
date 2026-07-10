@@ -588,3 +588,159 @@ Two things worth knowing if this trips someone up again:
   ConfigMap (`kube-prometheus-stack-grafana-datasource`) updates
   immediately on `helm upgrade` regardless -- Grafana just doesn't
   re-read it until the pod actually restarts.
+
+## Multi-host Proxmox provisioning: per-VM `node`, warning not a hard rule (2026-07-09)
+
+Parameterized `terraform/variables.tf`'s `masters`/`workers` maps with a
+per-entry `node` field (defaulting to `var.proxmox_node`, today's single
+real host) so the worker pool -- and masters, for real HA -- can span more
+than one physical Proxmox host without changing the single-host default
+behavior at all. `vms-masters.tf`/`vms-workers.tf` now read
+`each.value.node` instead of the old shared `var.proxmox_node`.
+
+**Anti-affinity as a `check` block, not a `precondition`.** 3 masters only
+give real HA if losing one physical host can't take out more than one of
+them. A hard `precondition` failing the plan/apply when two masters share a
+`node` would be the "correct" strict answer, but it would also immediately
+break this project's own actual current deployment (single host, all 3
+masters intentionally share the same node). Terraform's `check` block
+(warns via plan/apply output, never blocks) was the better fit here: it
+surfaces the real risk the moment someone edits `masters` for multi-host
+without actually spreading them, but doesn't turn "haven't gotten a second
+host yet" into a broken `terraform plan`.
+
+**Template distribution: per-host Packer build, not shared storage.**
+Considered registering a shared Proxmox storage pool (e.g. `pvesm add nfs`
+against the existing TrueNAS box, same mechanism as the `truenas-vzdump`
+backup target, but with `content=images` instead of `content=backup`) so
+one `packer build` produces a template every host can clone. Rejected for
+now: that TrueNAS export is currently registered backup-only, and
+repurposing/extending it for live VM disk and template I/O is new
+infrastructure with real unknowns this PR doesn't touch or verify
+(NFS latency/throughput under active clone-and-boot, not just nightly
+backup writes). Landed on the simpler alternative instead -- re-run
+`packer build -var proxmox_node=<host>` once per additional physical host,
+producing an independent copy of the same template VMID on that host's own
+local `nvme` storage. Real operational cost (rebuild once per host on every
+image update, N times instead of once), but zero new shared-storage
+dependency. If a second host materializes for real, re-evaluate whether
+`content=images` on the TrueNAS NFS export performs well enough to be worth
+switching to.
+
+**Ansible needed no changes at all.** `hosts.ini` and `playbook.yml` are
+already Kubernetes-node-identity-based (`hosts: masters`/`hosts: workers`),
+with zero awareness of which physical Proxmox host backs a given VM's
+compute -- confirmed by reading through `playbook.yml`'s host patterns
+rather than assumed, since the task description flagged this as something
+to actually verify.
+
+## Kata Containers: per-pod VM isolation for tenant workloads (2026-07-09)
+
+Every tenant container on a worker node currently shares that node's Linux
+kernel with every other tenant's pods -- Namespace/NetworkPolicy/
+ResourceQuota isolate at the Kubernetes API and network-policy level, but a
+kernel exploit in one tenant's pod is still a path to every other tenant on
+that node. Conceptually the same "shared kernel is the ceiling" problem
+this project's VLAN-isolation work was solving one layer down, at the
+network layer, for VLAN 30 as a whole.
+
+Added `clusters/k8s-homelab/kata-containers/`: `kata-deploy` (upstream's own
+installer for the Kata runtime) plus a `RuntimeClass` named `kata`, so any
+pod can opt in via `spec.runtimeClassName: kata` to run inside its own
+lightweight QEMU microVM instead of the shared host kernel. Opt-in, not
+cluster-wide default -- real per-pod overhead (memory/CPU for the microVM
+itself, plus the node needing nested virtualization -- see the open
+question below).
+
+**Install method: kata-deploy's official OCI Helm chart, not vendored raw
+manifests.** Historically kata-deploy was `kubectl apply -f` against raw
+DaemonSet/RBAC YAML fetched from the kata-containers repo. As of the
+`3.32.0` release (verified via `tools/packaging/kata-deploy/helm-chart/` in
+that tag, and `helm show values` against the published chart at
+`oci://ghcr.io/kata-containers/kata-deploy-charts/kata-deploy`), upstream
+now publishes and documents an official Helm chart as the primary install
+path. This fits this repo's existing pattern far better than vendoring raw
+manifests would (every other addon here is a Flux `HelmRelease`) and gets
+config knobs (`shims`, `runtimeClasses.createDefault`/`defaultName`,
+`k8sDistribution`) as real typed values instead of hand-edited env vars on
+a copy-pasted DaemonSet spec. Flux consumes it via `OCIRepository` +
+`HelmRelease.spec.chartRef` (the currently-recommended pattern for OCI
+charts -- `HelmRepository` with `type: oci` still works but upstream Flux
+docs call it maintenance-mode), pinned to the exact `3.32.0` tag, matching
+this repo's existing convention of exact chart-version pins (e.g. Loki's
+`6.55.0`) over floating ranges.
+
+**Only the `qemu` shim is enabled** (`shims.disableAll: true` +
+`shims.qemu.enabled: true`). kata-deploy ships shims for Firecracker, Cloud
+Hypervisor, NVIDIA GPU passthrough, and confidential-computing (SEV/TDX)
+hardware, none of which exist on this cluster's plain KVM-capable Proxmox
+VMs -- enabling them would just be dead DaemonSet install work and
+extra RuntimeClasses nobody can use.
+
+**`runtimeClasses.createDefault: true` + `defaultName: "kata"`** is what
+actually produces the `kata`-named `RuntimeClass` (in addition to the
+per-shim `kata-qemu` one the chart always creates when a shim is enabled)
+-- picked specifically so workloads opt in with the short, memorable
+`runtimeClassName: kata` instead of needing to know the shim name.
+
+**Cilium/containerd compatibility, checked rather than assumed:**
+- **Cilium + Kata is a documented-supported combination**
+  (docs.cilium.io/en/stable/network/kubernetes/kata/), via Kata's
+  tc-redirect-tap networking model (a tap device inside the pod's VM,
+  TC-mirrored to/from the veth pair Cilium already manages in the "outer"
+  netns). Cilium's own docs flag a real, known tradeoff worth stating
+  plainly: a ~46% cross-node throughput drop for Kata pods vs. Calico in
+  published benchmarks, and an MTU-propagation gap (the pod only inherits
+  the outer device MTU, not the adjusted route MTU) that upstream's
+  workaround is a per-pod initContainer, not a cluster-wide Cilium setting.
+  Not fixed here -- noted as a known limitation for anyone actually running
+  latency/throughput-sensitive tenant workloads under `kata`.
+- **`socketLB.hostNamespaceOnly: true` was added to the Cilium Helm values**
+  in `ansible/roles/cni/tasks/main.yml`, per the same Cilium/Kata doc page:
+  with `kubeProxyReplacement: true` (already this cluster's setting),
+  Cilium's socket-level load balancer intercepts a pod's `connect()`/
+  `sendmsg()` calls in the *outer* netns -- a Kata pod's actual workload
+  runs inside the microVM's own kernel, one layer below where that
+  interception happens, so it never benefits from it and Service resolution
+  for Kata pods needs the per-veth eBPF datapath instead. This only takes
+  effect on a *fresh* Cilium install (the Ansible task is guarded on
+  "not already installed" like the rest of `cni`); an already-bootstrapped
+  live cluster would need a manual `helm upgrade` to pick this up --
+  not done here since this PR doesn't touch live infrastructure.
+- **containerd config changes are handled entirely by kata-deploy itself,
+  not a new Ansible role.** Confirmed via upstream kata-deploy
+  documentation/manifests rather than assumed: the DaemonSet mounts
+  `/etc/containerd/` from the host, edits `config.toml` to add the
+  `io.containerd.kata.v2` runtime handler(s), and restarts containerd
+  itself (via `hostPID: true` to reach the host's PID/mount namespace) as
+  part of its own install/uninstall lifecycle. This is genuinely a
+  Kubernetes-layer (Flux-managed) concern, not a node-provisioning one --
+  `ansible/roles/containerd/` was deliberately left untouched.
+
+**Open question / not independently verified: nested virtualization on the
+physical Proxmox host.** Kata's `qemu` shim needs the worker VM itself to
+expose VT-x/AMD-V to its guest kernel (`/dev/kvm` inside the k8s-worker VM),
+which requires the *physical* Proxmox host's own KVM kernel module loaded
+with nested virtualization enabled (`kvm_intel nested=1` or
+`kvm_amd nested=1`) -- a host-level setting this repo's automation doesn't
+control and this PR has no credentials/access to check on the real
+`prox.mox` host. Workers already use `cpu.type = "host"` (passes through
+host CPU features, including VMX/SVM, if present), so if nested
+virtualization is enabled at the host kernel level this should just work;
+if not, `kata-qemu` pods will fail to start with a clear KVM-related error.
+**Verify `cat /sys/module/kvm_intel/parameters/nested` (or `kvm_amd`) on
+`prox.mox` is `Y`/`1` before relying on this in anger** -- not done as part
+of this PR. Deliberately left `node-feature-discovery.enabled: false` (the
+chart's own mechanism for gating scheduling on detected VT-x/AMD-V
+support) rather than standing up a whole NFD deployment just for this one
+check; the tradeoff is a real-but-clear KVM failure on an unsupported node
+instead of a silent scheduling skip.
+
+**Also not verified/sized: per-pod Kata VM overhead against the current
+worker sizing** (6 vCPU/12GB, already trimmed once for Rook/Ceph -- see
+"Storage: Rook/Ceph" above). Kata's default per-pod overhead
+(cpu/memory reserved for the microVM itself, on top of whatever the
+workload requests) is real and additive on an already-modest node. Left
+unmeasured rather than guessed at -- same reasoning as the CI-runner
+capacity work: don't resize off a point-in-time guess, measure real usage
+once Kata pods actually run, then revisit sizing with data if it's tight.
