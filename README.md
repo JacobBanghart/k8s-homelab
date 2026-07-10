@@ -76,7 +76,9 @@ through:
 - `packer/variables.pkr.hcl` — Proxmox node/storage pool names, template
   VMID, Ubuntu version.
 - `terraform/variables.tf` — Proxmox connection info, VLAN tag, master/
-  worker IPs and VM IDs (the `masters`/`workers` maps), disk sizing.
+  worker IPs and VM IDs (the `masters`/`workers` maps, each entry also
+  carrying a `node` field for which physical Proxmox host to clone onto —
+  see `docs/architecture.md` for multi-host setups), disk sizing.
 - `ansible/inventory/hosts.ini` — must match whatever static IPs you put
   in `terraform/variables.tf`.
 - `unifi/vlans.tf` and `unifi/firewall.tf` — the VLAN subnet/DHCP range

@@ -1,0 +1,52 @@
+# Kata Containers: pods opting into `spec.runtimeClassName: kata` run inside
+# a lightweight per-pod VM (QEMU + a minimal guest kernel) instead of sharing
+# the worker node's kernel with every other tenant's pod. See
+# docs/decisions.md ("Kata Containers: per-pod VM isolation for tenant
+# workloads") for the shared-kernel threat model this addresses and why
+# this chart/config was chosen over the alternatives.
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: kata-deploy
+  namespace: kube-system
+spec:
+  interval: 10m
+  chartRef:
+    kind: OCIRepository
+    name: kata-deploy
+  install:
+    remediation:
+      retries: 3
+  upgrade:
+    remediation:
+      retries: 3
+  values:
+    # Vanilla kubeadm, not k3s/rke2/k0s/microk8s -- controls the
+    # auto-detected containerd config path/socket kata-deploy patches on
+    # each node.
+    k8sDistribution: "k8s"
+
+    shims:
+      disableAll: true
+      qemu:
+        # The only shim enabled: this cluster is plain KVM-capable amd64
+        # Proxmox VMs, nothing that needs Firecracker, Cloud Hypervisor,
+        # NVIDIA GPU passthrough, or confidential-computing (SEV/TDX) shims.
+        enabled: true
+
+    runtimeClasses:
+      enabled: true
+      # Creates one RuntimeClass per enabled shim (kata-qemu) plus this
+      # extra alias, so workloads can opt in with the short, memorable
+      # `runtimeClassName: kata` instead of needing to know the shim name.
+      createDefault: true
+      defaultName: "kata"
+
+    # No independent node-feature-discovery deployment on this cluster.
+    # Tradeoff: NFD would otherwise gate kata-deploy to only nodes whose CPU
+    # actually exposes VT-x/AMD-V (nested virtualization), so a node missing
+    # that gets a real (if noisy) scheduling failure instead of a silent
+    # feature-detection skip. See docs/decisions.md for why this was left
+    # off and what to check before relying on this in anger.
+    node-feature-discovery:
+      enabled: false

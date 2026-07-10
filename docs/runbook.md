@@ -67,6 +67,27 @@ cp /tmp/merged.yaml ~/.kube/config
 kubectl --context k8s-homelab get nodes
 ```
 
+## Adding a second physical Proxmox host
+
+1. Build the golden template on the new host too (see
+   `docs/architecture.md`, "Multi-host provisioning", for why this is a
+   per-host `packer build` rather than a shared-storage clone today):
+   ```bash
+   cd packer
+   packer build -var proxmox_node=<new-host-name> .
+   ```
+2. In `terraform/variables.tf`, give the masters/workers you want on the new
+   host a `node` override, e.g.:
+   ```hcl
+   k8s-master-2 = { ip = "10.4.0.12", vm_id = 9103, node = "<new-host-name>" }
+   ```
+3. `terraform plan` -- watch for the `master_node_anti_affinity` check
+   warning if you *didn't* spread masters across hosts (expected/harmless on
+   a single-host plan, worth a second look on a multi-host one).
+4. `terraform apply` as usual. Nothing in `ansible/inventory/hosts.ini` or
+   `ansible/playbook.yml` needs to change -- Ansible only sees Kubernetes
+   node hostnames/IPs, not which physical host they're compute-backed by.
+
 ## Idempotency check
 
 ```bash

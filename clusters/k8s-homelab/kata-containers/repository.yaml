@@ -1,0 +1,17 @@
+# kata-deploy publishes its Helm chart as an OCI artifact, not from a
+# classic chart-index HelmRepository -- OCIRepository + HelmRelease.chartRef
+# is Flux's current recommended way to consume that (HelmRepository's
+# `type: oci` still works but upstream Flux docs call it maintenance-mode).
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: OCIRepository
+metadata:
+  name: kata-deploy
+  namespace: kube-system
+spec:
+  interval: 1h
+  url: oci://ghcr.io/kata-containers/kata-deploy-charts/kata-deploy
+  ref:
+    # Pinned to an exact release, same convention as this repo's other
+    # Helm-based addons (e.g. loki's exact "6.55.0") -- bump deliberately,
+    # not via a floating tag/semver range.
+    tag: "3.32.0"

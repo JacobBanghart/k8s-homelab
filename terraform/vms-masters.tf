@@ -2,7 +2,7 @@ resource "proxmox_virtual_environment_vm" "master" {
   for_each = var.masters
 
   name      = each.key
-  node_name = var.proxmox_node
+  node_name = each.value.node
   vm_id     = each.value.vm_id
 
   clone {
