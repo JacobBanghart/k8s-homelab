@@ -1,0 +1,85 @@
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: traefik
+  namespace: traefik
+spec:
+  interval: 10m
+  chart:
+    spec:
+      chart: traefik
+      version: "39.0.7"
+      sourceRef:
+        kind: HelmRepository
+        name: traefik
+        namespace: traefik
+  install:
+    crds: CreateReplace
+    remediation:
+      retries: 3
+  upgrade:
+    crds: CreateReplace
+    remediation:
+      retries: 3
+  values:
+    # Internal-only VLAN-isolated cluster: no public domain, so no
+    # Cloudflare DNS-01/ACME cert resolver. TLS is terminated using an
+    # internal cert-manager CA instead (see
+    # clusters/k8s-homelab-config/cert-manager/) -- websecure uses that
+    # cert as its default via a Traefik TLSStore, and HTTP redirects to it.
+    ingressClass:
+      enabled: true
+      isDefaultClass: true
+
+    ports:
+      web:
+        http:
+          redirections:
+            entryPoint:
+              to: websecure
+              scheme: https
+      websecure:
+        http:
+          tls:
+            enabled: true
+
+    ingressRoute:
+      dashboard:
+        enabled: true
+
+    # 3 replicas, one per worker, so draining any single node still leaves
+    # 2 ready endpoints -- zero-downtime drains instead of a gap while a
+    # single replacement pod reschedules and passes its readiness probe.
+    deployment:
+      replicas: 3
+
+    # Default surge-first rollout (maxSurge:1, maxUnavailable:0) deadlocks
+    # here: a 4th pod can't schedule under the 1-per-node topology spread
+    # constraint below (all 3 workers already have a pod), so it sits
+    # Pending until manually intervened. Terminate-first instead: free a
+    # node slot before scheduling the replacement.
+    updateStrategy:
+      type: RollingUpdate
+      rollingUpdate:
+        maxUnavailable: 1
+        maxSurge: 0
+
+    topologySpreadConstraints:
+      - labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: traefik
+        maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: DoNotSchedule
+
+    podDisruptionBudget:
+      enabled: true
+      maxUnavailable: 1
+
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "128Mi"
+      limits:
+        cpu: "500m"
+        memory: "256Mi"

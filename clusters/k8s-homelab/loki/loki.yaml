@@ -1,0 +1,74 @@
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: loki
+  namespace: monitoring
+spec:
+  interval: 10m
+  chart:
+    spec:
+      chart: loki
+      version: "6.55.0"
+      sourceRef:
+        kind: HelmRepository
+        name: grafana
+        namespace: monitoring
+  install:
+    crds: CreateReplace
+    remediation:
+      retries: 3
+  upgrade:
+    crds: CreateReplace
+    remediation:
+      retries: 3
+  values:
+    # SingleBinary + filesystem storage on a ceph-block PVC -- homelab scale,
+    # no need for the SimpleScalable/Distributed modes or object storage.
+    deploymentMode: SingleBinary
+
+    loki:
+      commonConfig:
+        replication_factor: 1
+      storage:
+        type: filesystem
+      # Simple built-in schema instead of hand-writing schemaConfig -- fine
+      # for a homelab, not running at a scale where schema tuning matters.
+      useTestSchema: true
+      auth_enabled: false
+      limits_config:
+        retention_period: 168h # 7d
+
+    singleBinary:
+      replicas: 1
+      persistence:
+        enabled: true
+        storageClass: ceph-block
+        size: 20Gi
+      resources:
+        requests:
+          cpu: "100m"
+          memory: "256Mi"
+        limits:
+          cpu: "500m"
+          memory: "1Gi"
+
+    # SimpleScalable-only components -- not used in SingleBinary mode.
+    read:
+      replicas: 0
+    write:
+      replicas: 0
+    backend:
+      replicas: 0
+
+    # Not needed for a single in-cluster consumer (Grafana talks to the
+    # singleBinary service directly) or at this traffic scale.
+    gateway:
+      enabled: false
+    chunksCache:
+      enabled: false
+    resultsCache:
+      enabled: false
+    lokiCanary:
+      enabled: false
+    test:
+      enabled: false

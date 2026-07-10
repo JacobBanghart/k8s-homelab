@@ -1,0 +1,16 @@
+---
+control_plane_endpoint: "10.4.0.10:6443"
+pod_network_cidr: "10.42.0.0/16"
+cilium_version: "1.16.5"
+
+# Floating VIP for the control plane, failover-only via keepalived (no
+# load-balancing across masters -- matches the same failover-only model
+# used for MetalLB). Outside VLAN 30's DHCP range (.6-.199) and outside
+# the MetalLB pool (.200-.220).
+control_plane_vip: "10.4.0.5"
+control_plane_vip_interface: "eth0"
+control_plane_vip_router_id: 51
+# VRRP auth is a legacy/weak mechanism (deprecated in the RFC, kept only
+# for interop) -- not a real secret, just here to stop stray VRRP traffic
+# on the same VLAN from a different project interfering.
+control_plane_vip_auth_pass: "k8shomelab-vrrp"

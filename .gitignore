@@ -1,0 +1,41 @@
+# Terraform
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/terraform.tfvars
+terraform/*.auto.tfvars
+terraform/crash.log
+
+# Packer
+packer/*.pkr.hcl.lock.hcl
+packer/packer_cache/
+packer/downloaded_iso_path/
+packer/*.auto.pkrvars.hcl
+!packer/*.auto.pkrvars.hcl.example
+
+# Ansible
+ansible/*.retry
+ansible/.join-commands.sh
+ansible/inventory/host_vars/*.yml
+!ansible/inventory/host_vars/*.example.yml
+
+# SSH keys generated for the cluster
+*.pem
+id_rsa*
+!id_rsa*.pub
+# Pi-hole's public TLS CA cert (used by the pihole Terraform provider to
+# validate its admin API over HTTPS) -- a public cert, not a secret.
+!unifi/pihole-ca.pem
+
+# UniFi/Pi-hole Terraform (unifi/)
+unifi/.terraform/
+unifi/*.tfstate
+unifi/*.tfstate.*
+unifi/terraform.tfvars
+unifi/*.auto.tfvars
+unifi/crash.log
+unifi/crash.*.log
+
+# OS/editor cruft
+.DS_Store
+*.swp

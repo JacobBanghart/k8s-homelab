@@ -1,0 +1,19 @@
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: k8s-lab-pool
+  namespace: metallb-system
+spec:
+  # Reserved outside VLAN 30's DHCP range (dhcp_stop set to 10.4.0.199 in
+  # UnifiTerraform) so these addresses are never handed out by DHCP.
+  addresses:
+    - 10.4.0.200-10.4.0.220
+---
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata:
+  name: k8s-lab-l2
+  namespace: metallb-system
+spec:
+  ipAddressPools:
+    - k8s-lab-pool

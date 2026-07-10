@@ -1,0 +1,73 @@
+---
+- name: Common OS config across the whole cluster
+  hosts: k8s_cluster
+  become: true
+  tags: [common]
+  roles:
+    - common
+
+- name: Containerd drift correction across the whole cluster
+  hosts: k8s_cluster
+  become: true
+  tags: [containerd]
+  roles:
+    - containerd
+
+- name: Initialize the first control-plane node
+  hosts: control_plane_init
+  become: true
+  tags: [kubeadm-init]
+  roles:
+    - kubeadm_init
+
+- name: Install CNI
+  hosts: control_plane_init
+  become: true
+  tags: [cni]
+  roles:
+    - cni
+
+- name: Join remaining control-plane nodes
+  hosts: control_plane_join
+  become: true
+  tags: [join-masters]
+  roles:
+    - join_masters
+
+- name: Join worker nodes
+  hosts: workers
+  become: true
+  tags: [join-workers]
+  roles:
+    - join_workers
+
+- name: Install metrics-server
+  hosts: control_plane_init
+  become: true
+  tags: [metrics-server]
+  roles:
+    - metrics_server
+
+- name: Install floating VIP for the control plane
+  hosts: masters
+  become: true
+  tags: [control-plane-vip]
+  roles:
+    - control_plane_vip
+
+- name: Expose control-plane component metrics for Prometheus
+  hosts: masters
+  become: true
+  # One master at a time -- this restarts etcd's static pod when patched,
+  # and restarting all 3 etcd members simultaneously would break quorum.
+  serial: 1
+  tags: [control-plane-metrics]
+  roles:
+    - control_plane_metrics
+
+- name: Security-only automatic OS patching across the whole cluster
+  hosts: k8s_cluster
+  become: true
+  tags: [unattended-upgrades]
+  roles:
+    - unattended_upgrades

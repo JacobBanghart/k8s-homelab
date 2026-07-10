@@ -1,0 +1,42 @@
+---
+# Runs only against the control_plane_init host, after cni. Not part of a
+# base kubeadm install — needed for `kubectl top` / k9s CPU-MEM columns.
+
+- name: Add metrics-server Helm repo
+  kubernetes.core.helm_repository:
+    name: metrics-server
+    repo_url: https://kubernetes-sigs.github.io/metrics-server/
+  become: false
+  environment:
+    KUBECONFIG: /home/ansible/.kube/config
+
+- name: Check if metrics-server is already installed
+  ansible.builtin.command: kubectl -n kube-system get deployment metrics-server
+  register: metrics_server_check
+  failed_when: false
+  changed_when: false
+  become: false
+  environment:
+    KUBECONFIG: /home/ansible/.kube/config
+
+- name: Install metrics-server
+  kubernetes.core.helm:
+    name: metrics-server
+    chart_ref: metrics-server/metrics-server
+    release_namespace: kube-system
+    values:
+      # Self-signed kubelet certs on this learning cluster (no real PKI
+      # integration) — insecure-tls is the standard workaround.
+      args:
+        - --kubelet-insecure-tls
+  when: metrics_server_check.rc != 0
+  become: false
+  environment:
+    KUBECONFIG: /home/ansible/.kube/config
+
+- name: Wait for metrics-server to be ready
+  ansible.builtin.command: kubectl -n kube-system rollout status deployment/metrics-server --timeout=120s
+  changed_when: false
+  become: false
+  environment:
+    KUBECONFIG: /home/ansible/.kube/config

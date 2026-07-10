@@ -1,0 +1,108 @@
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: kube-prometheus-stack
+  namespace: monitoring
+spec:
+  interval: 10m
+  chart:
+    spec:
+      chart: kube-prometheus-stack
+      version: "87.12.2"
+      sourceRef:
+        kind: HelmRepository
+        name: prometheus-community
+        namespace: monitoring
+  install:
+    crds: CreateReplace
+    remediation:
+      retries: 3
+  upgrade:
+    crds: CreateReplace
+    remediation:
+      retries: 3
+  values:
+    # kubeadm bound kube-scheduler/kube-controller-manager/etcd metrics to
+    # 127.0.0.1 by default (security hardening in modern kubeadm), which
+    # made these ServiceMonitors sit permanently "down". Fixed 2026-07-09
+    # by patching the static pod manifests on all 3 masters to bind
+    # 0.0.0.0 (ansible/roles/control_plane_metrics/) -- see
+    # docs/decisions.md for the writeup. kubeProxy stays disabled: same
+    # bind issue, but also moot since this cluster runs Cilium with
+    # kube-proxy-replacement=true, so its metrics aren't meaningful here
+    # regardless of reachability.
+    kubeProxy:
+      enabled: false
+
+    alertmanager:
+      alertmanagerSpec:
+        replicas: 1
+        retention: 120h
+        storage:
+          volumeClaimTemplate:
+            spec:
+              storageClassName: ceph-block
+              accessModes: ["ReadWriteOnce"]
+              resources:
+                requests:
+                  storage: 2Gi
+        resources:
+          requests:
+            cpu: "50m"
+            memory: "64Mi"
+          limits:
+            cpu: "200m"
+            memory: "128Mi"
+
+    prometheus:
+      prometheusSpec:
+        retention: 15d
+        storageSpec:
+          volumeClaimTemplate:
+            spec:
+              storageClassName: ceph-block
+              accessModes: ["ReadWriteOnce"]
+              resources:
+                requests:
+                  storage: 20Gi
+        resources:
+          requests:
+            cpu: "200m"
+            memory: "512Mi"
+          limits:
+            cpu: "1000m"
+            memory: "1Gi"
+
+    grafana:
+      admin:
+        existingSecret: grafana-admin-credentials
+        userKey: admin-user
+        passwordKey: admin-password
+      persistence:
+        enabled: true
+        storageClassName: ceph-block
+        accessModes: ["ReadWriteOnce"]
+        size: 5Gi
+      ingress:
+        enabled: true
+        ingressClassName: traefik
+        hosts:
+          - grafana.k8s-homelab.local
+        # No secretName -- Traefik terminates TLS using its default
+        # TLSStore cert (the internal cert-manager CA's wildcard cert).
+        tls:
+          - hosts:
+              - grafana.k8s-homelab.local
+      resources:
+        requests:
+          cpu: "50m"
+          memory: "128Mi"
+        limits:
+          cpu: "200m"
+          memory: "256Mi"
+      additionalDataSources:
+        - name: Loki
+          type: loki
+          access: proxy
+          url: http://loki:3100
+          isDefault: false

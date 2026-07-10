@@ -1,0 +1,8 @@
+# Copy to k8s-node.auto.pkrvars.hcl and fill in real values. Never commit
+# the real file.
+proxmox_api_token_secret = "REPLACE_WITH_TOKEN_SECRET"
+ssh_public_key            = "ssh-ed25519 AAAA... k8s-homelab-ansible"
+
+# Optional: override the default Ubuntu point release (see variables.pkr.hcl).
+# Must be a real point release published at https://releases.ubuntu.com/<major>/.
+# ubuntu_point_release = "24.04.4"

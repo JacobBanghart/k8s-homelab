@@ -1,0 +1,28 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: k8s-homelab-wildcard
+  namespace: traefik
+spec:
+  secretName: k8s-homelab-wildcard-tls
+  duration: 2160h # 90d
+  renewBefore: 360h # 15d
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  dnsNames:
+    - "*.k8s-homelab.local"
+    - "k8s-homelab.local"
+  issuerRef:
+    name: k8s-homelab-ca-issuer
+    kind: ClusterIssuer
+    group: cert-manager.io
+---
+apiVersion: traefik.io/v1alpha1
+kind: TLSStore
+metadata:
+  name: default
+  namespace: traefik
+spec:
+  defaultCertificate:
+    secretName: k8s-homelab-wildcard-tls

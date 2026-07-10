@@ -1,0 +1,37 @@
+---
+- name: Set hostname
+  ansible.builtin.hostname:
+    name: "{{ inventory_hostname }}"
+
+- name: Ensure all cluster nodes resolve via /etc/hosts
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    line: "{{ hostvars[item].ansible_host }} {{ item }}"
+    state: present
+  loop: "{{ groups['k8s_cluster'] }}"
+
+- name: Install chrony for time sync
+  ansible.builtin.apt:
+    name: chrony
+    state: present
+    update_cache: true
+  register: apt_result
+  retries: 3
+  delay: 5
+  until: apt_result is succeeded
+
+- name: Ensure chrony is enabled and running
+  ansible.builtin.systemd:
+    name: chrony
+    enabled: true
+    state: started
+
+- name: Confirm swap is off (should already be disabled by the Packer image)
+  ansible.builtin.command: swapon --summary
+  register: swap_check
+  changed_when: false
+
+- name: Fail if swap is active
+  ansible.builtin.fail:
+    msg: "Swap is active on {{ inventory_hostname }} — kubelet requires swap disabled"
+  when: swap_check.stdout | trim | length > 0

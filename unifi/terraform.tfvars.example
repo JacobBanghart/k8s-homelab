@@ -1,0 +1,17 @@
+# Copy this file to terraform.tfvars and fill in your values
+# DO NOT commit terraform.tfvars to git
+
+# Option 1: API Key (preferred)
+# Generate at: UDM Pro -> Settings -> Admins & Users -> [your user] -> API Key
+unifi_api_key = "your-api-key-here"
+
+# Option 2: Username/Password (leave api_key empty)
+# unifi_username = "admin"
+# unifi_password = "your-password-here"
+
+unifi_api_url = "https://10.1.0.1"
+site          = "default"
+
+# Pi-hole
+pihole_url      = "https://10.1.0.142"
+pihole_password = "your-pihole-admin-password"

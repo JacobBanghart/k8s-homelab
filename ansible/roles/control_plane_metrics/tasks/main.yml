@@ -1,0 +1,70 @@
+---
+# kubeadm binds kube-scheduler/kube-controller-manager/etcd metrics to
+# 127.0.0.1 by default (security hardening) -- monitoring's own scrape
+# path is in-cluster (pod network, not host network), so 127.0.0.1 is
+# unreachable from Prometheus regardless of Service/Endpoints config.
+# Rebinding to 0.0.0.0 is safe here: these are still only reachable from
+# inside the cluster's pod/VLAN network, not exposed externally, and the
+# same tradeoff kubeadm made before defaulting to 127.0.0.1 in newer
+# versions.
+
+- name: Rebind kube-scheduler metrics to 0.0.0.0
+  ansible.builtin.replace:
+    path: /etc/kubernetes/manifests/kube-scheduler.yaml
+    regexp: '--bind-address=127\.0\.0\.1'
+    replace: '--bind-address=0.0.0.0'
+  register: scheduler_patched
+
+- name: Rebind kube-controller-manager metrics to 0.0.0.0
+  ansible.builtin.replace:
+    path: /etc/kubernetes/manifests/kube-controller-manager.yaml
+    regexp: '--bind-address=127\.0\.0\.1'
+    replace: '--bind-address=0.0.0.0'
+  register: controller_manager_patched
+
+- name: Rebind etcd metrics to 0.0.0.0
+  ansible.builtin.replace:
+    path: /etc/kubernetes/manifests/etcd.yaml
+    regexp: '--listen-metrics-urls=http://127\.0\.0\.1:2381'
+    replace: '--listen-metrics-urls=http://0.0.0.0:2381'
+  register: etcd_patched
+
+# Static pod manifest edits are usually picked up by kubelet's own
+# fsnotify watch + periodic resync, but force it explicitly and
+# deterministically rather than waiting/hoping, one component at a time.
+- name: Force kube-scheduler restart if patched
+  ansible.builtin.command:
+    cmd: "kubectl delete pod kube-scheduler-{{ inventory_hostname }} -n kube-system --kubeconfig /etc/kubernetes/admin.conf"
+  when: scheduler_patched.changed
+  changed_when: true
+  failed_when: false
+
+- name: Force kube-controller-manager restart if patched
+  ansible.builtin.command:
+    cmd: "kubectl delete pod kube-controller-manager-{{ inventory_hostname }} -n kube-system --kubeconfig /etc/kubernetes/admin.conf"
+  when: controller_manager_patched.changed
+  changed_when: true
+  failed_when: false
+
+- name: Force etcd restart if patched
+  ansible.builtin.command:
+    cmd: "kubectl delete pod etcd-{{ inventory_hostname }} -n kube-system --kubeconfig /etc/kubernetes/admin.conf"
+  when: etcd_patched.changed
+  changed_when: true
+  failed_when: false
+
+# Wait for this master's etcd to be back and Ready before `serial: 1` lets
+# the play move on to the next master -- restarting two etcd members
+# overlapping would risk quorum.
+- name: Wait for etcd to be Ready again on this master
+  ansible.builtin.command:
+    cmd: >-
+      kubectl get pod etcd-{{ inventory_hostname }} -n kube-system
+      --kubeconfig /etc/kubernetes/admin.conf
+      -o jsonpath={.status.containerStatuses[0].ready}
+  register: etcd_ready_check
+  until: etcd_ready_check.stdout == "true"
+  retries: 30
+  delay: 5
+  when: etcd_patched.changed
+  changed_when: false

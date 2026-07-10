@@ -1,0 +1,25 @@
+vrrp_script chk_apiserver {
+    script "/etc/keepalived/check_apiserver.sh"
+    interval 3
+    weight -20
+    fall 10
+    rise 2
+    user root
+}
+
+vrrp_instance VI_1 {
+    state {{ keepalived_state }}
+    interface {{ control_plane_vip_interface }}
+    virtual_router_id {{ control_plane_vip_router_id }}
+    priority {{ keepalived_priority }}
+    authentication {
+        auth_type PASS
+        auth_pass {{ control_plane_vip_auth_pass }}
+    }
+    virtual_ipaddress {
+        {{ control_plane_vip }}/24
+    }
+    track_script {
+        chk_apiserver
+    }
+}

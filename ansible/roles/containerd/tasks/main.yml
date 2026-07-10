@@ -1,0 +1,44 @@
+---
+# The Packer image already installs and configures containerd; this role
+# only corrects drift so it can be safely re-run independent of image
+# rebuilds (e.g. after a manual config edit on a node).
+
+- name: Ensure containerd is installed
+  ansible.builtin.apt:
+    name: containerd.io
+    state: present
+
+- name: Ensure containerd config directory exists
+  ansible.builtin.file:
+    path: /etc/containerd
+    state: directory
+    mode: "0755"
+
+- name: Check whether containerd config exists
+  ansible.builtin.stat:
+    path: /etc/containerd/config.toml
+  register: containerd_config
+
+- name: Generate default containerd config if missing
+  ansible.builtin.shell: containerd config default > /etc/containerd/config.toml
+  when: not containerd_config.stat.exists
+
+- name: Ensure SystemdCgroup is enabled (required by kubelet)
+  ansible.builtin.lineinfile:
+    path: /etc/containerd/config.toml
+    regexp: "^(\\s*)SystemdCgroup = false"
+    line: "\\1SystemdCgroup = true"
+    backrefs: true
+  register: cgroup_fix
+
+- name: Ensure containerd is enabled and running
+  ansible.builtin.systemd:
+    name: containerd
+    enabled: true
+    state: started
+
+- name: Restart containerd if config changed
+  ansible.builtin.systemd:
+    name: containerd
+    state: restarted
+  when: cgroup_fix.changed or not containerd_config.stat.exists

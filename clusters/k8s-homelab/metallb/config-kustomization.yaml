@@ -1,0 +1,25 @@
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: metallb-config
+  namespace: flux-system
+spec:
+  # MetalLB's CRDs (IPAddressPool, L2Advertisement) don't exist until the
+  # metallb HelmRelease itself has been reconciled, so the CR instances
+  # can't live in the same flat apply as the HelmRelease -- their dry-run
+  # would fail before the CRDs are ever installed and block the whole
+  # tree's apply. Reconciling this as its own Kustomization means a failed
+  # attempt (CRDs not installed yet) only blocks itself, and it keeps
+  # retrying independently until the CRDs land.
+  interval: 10m
+  retryInterval: 1m
+  path: ./clusters/k8s-homelab-config/metallb
+  prune: true
+  wait: true
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+    namespace: flux-system
+  dependsOn:
+    - name: flux-system
+      namespace: flux-system

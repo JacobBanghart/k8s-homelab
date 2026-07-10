@@ -1,0 +1,54 @@
+---
+# Runs only against the control_plane_init host, after kubeadm_init.
+
+- name: Check whether helm is already installed
+  ansible.builtin.command: which helm
+  register: helm_check
+  failed_when: false
+  changed_when: false
+
+- name: Install Helm
+  ansible.builtin.shell: |
+    curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+  when: helm_check.rc != 0
+
+- name: Add Cilium Helm repo
+  kubernetes.core.helm_repository:
+    name: cilium
+    repo_url: https://helm.cilium.io/
+  become: false
+  environment:
+    KUBECONFIG: /home/ansible/.kube/config
+
+- name: Check if Cilium is already installed
+  ansible.builtin.command: kubectl -n kube-system get daemonset cilium
+  register: cilium_check
+  failed_when: false
+  changed_when: false
+  become: false
+  environment:
+    KUBECONFIG: /home/ansible/.kube/config
+
+- name: Install Cilium CNI
+  kubernetes.core.helm:
+    name: cilium
+    chart_ref: cilium/cilium
+    chart_version: "{{ cilium_version }}"
+    release_namespace: kube-system
+    values:
+      ipam:
+        mode: kubernetes
+      kubeProxyReplacement: true
+      k8sServiceHost: "{{ control_plane_endpoint.split(':')[0] }}"
+      k8sServicePort: "{{ control_plane_endpoint.split(':')[1] }}"
+  when: cilium_check.rc != 0
+  become: false
+  environment:
+    KUBECONFIG: /home/ansible/.kube/config
+
+- name: Wait for Cilium daemonset to be ready
+  ansible.builtin.command: kubectl -n kube-system rollout status daemonset/cilium --timeout=180s
+  changed_when: false
+  become: false
+  environment:
+    KUBECONFIG: /home/ansible/.kube/config
