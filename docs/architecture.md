@@ -5,7 +5,7 @@
 ```
 Packer (packer/)          Terraform (terraform/)         Ansible (ansible/)
 ------------------         ----------------------         ------------------
-Ubuntu 22.04 ISO      -->  clone template 9000       -->  common
+Ubuntu 24.04 ISO      -->  clone template 9000       -->  common
 + containerd               into 3 masters + 3 workers      containerd
 + kubeadm/kubelet/kubectl  on VLAN 30 (k8s-lab),           kubeadm-init (master-0)
   (pinned)                 nvme storage, cloud-init        cni (Cilium)
