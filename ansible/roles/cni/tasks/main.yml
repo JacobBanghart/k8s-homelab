@@ -41,6 +41,21 @@
       kubeProxyReplacement: true
       k8sServiceHost: "{{ control_plane_endpoint.split(':')[0] }}"
       k8sServicePort: "{{ control_plane_endpoint.split(':')[1] }}"
+      # Required for Kata Containers compatibility (clusters/k8s-homelab/kata-containers/):
+      # with kubeProxyReplacement enabled, Cilium's socket-level LB intercepts a pod's
+      # own connect()/sendmsg() syscalls at the host network namespace level. A Kata
+      # pod's real workload runs inside a microVM with its own kernel, one layer below
+      # the "outer" netns Cilium instruments -- socket-level LB never sees those
+      # syscalls at all, so leaving it on for pods is dead weight at best. Cilium's own
+      # docs (docs.cilium.io/en/stable/network/kubernetes/kata/) call out
+      # socketLB.hostNamespaceOnly=true as required in kube-proxy-replacement mode so
+      # Service resolution still works via the per-veth eBPF datapath (tc-redirect-tap)
+      # that Kata's networking actually goes through, instead of relying on the
+      # socket-level shortcut. Confirmed safe for non-Kata pods too: it just changes
+      # *where* LB happens (netns of the pod's veth vs. the socket layer), not whether
+      # Services resolve at all.
+      socketLB:
+        hostNamespaceOnly: true
   when: cilium_check.rc != 0
   become: false
   environment:
