@@ -818,3 +818,21 @@ status page) -- both still have `jacobbanghart.com` hardcoded into
 their hostnames today, which a cloner would need to edit; not yet
 templated/parameterized, tracked as a follow-up, not done as part of
 this split.
+
+## k8s-lab -> TrueNAS NFS firewall exception, narrowly scoped (2026-07-19)
+
+Migrating stateful app data (Wave 2 onward) needs to copy real content
+from TrueNAS into new Ceph PVCs, via a one-off Job that NFS-mounts
+TrueNAS directly. First attempt just hung on `mount` with no error --
+k8s-lab's zone-based firewall (see "k8s-lab VLAN Isolation" above) has no
+explicit outbound policy to Internal, so it silently default-denies
+rather than rejecting. Given the documented prior outage from an
+under-scoped k8s-lab firewall change, added the narrowest possible
+exception rather than a general "k8s-lab -> Internal" allow:
+`allow_k8s_lab_to_truenas_nfs` in `unifi/firewall.tf` -- destination
+`matching_target = "IP"` pinned to `10.1.0.45/32` only, `port_matching_type
+= "SPECIFIC"` pinned to `2049` only (NFSv4's single consolidated port;
+migration jobs mount explicitly as `nfs4`, so portmapper/111 isn't
+needed). Verified via a throwaway pod: TrueNAS:2049 now reachable,
+dev's SSH (10.1.0.34:22, a different Internal host/port) still times
+out as expected -- no broader hole opened.

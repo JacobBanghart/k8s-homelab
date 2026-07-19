@@ -64,3 +64,38 @@ resource "unifi_firewall_policy" "allow_internal_to_k8s_lab" {
   }
 }
 
+# =============================================================================
+# k8s-lab -> TrueNAS (NFS, port 2049 only) -- added for the dev-cluster
+# migration (2026-07-19)
+# =============================================================================
+# k8s-lab has no other explicit outbound policy (see the design note
+# above), so without this, migration jobs mounting TrueNAS NFS to copy app
+# data across just hang on the mount (silent default-deny, no rejection).
+# Scoped to TrueNAS's single IP and NFSv4's single consolidated port
+# (2049 -- portmapper/111 isn't needed since migration jobs mount
+# explicitly as nfs4, not nfs3) rather than the whole Internal zone, to
+# keep this as narrow as the isolation this VLAN was built for allows.
+# Given the prior outage from an under-scoped k8s-lab firewall change (see
+# the design note above and docs/decisions.md), double-check this in a
+# `terraform plan` before applying, same as always, but especially here.
+resource "unifi_firewall_policy" "allow_k8s_lab_to_truenas_nfs" {
+  name                 = "Allow k8s-lab to TrueNAS (NFS)"
+  action               = "ALLOW"
+  protocol             = "tcp"
+  create_allow_respond = true
+  description          = "NFS data migration jobs (k8s-lab -> TrueNAS) during the dev-cluster migration. Scoped to TrueNAS's IP and NFSv4's port only."
+
+  source = {
+    zone_id         = unifi_firewall_zone.k8s_lab.id
+    matching_target = "ANY"
+  }
+
+  destination = {
+    zone_id            = data.unifi_firewall_zone.internal.id
+    matching_target    = "IP"
+    ips                = ["10.1.0.45/32"]
+    port_matching_type = "SPECIFIC"
+    port               = "2049"
+  }
+}
+
