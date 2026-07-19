@@ -1,0 +1,22 @@
+# TLS passthrough on the shared 443 entrypoint, SNI-routed -- not a
+# second MetalLB IP (matches the per-app pattern documented in
+# unifi/pihole_dns.tf: everything behind the one Traefik VIP). Vault
+# terminates its own TLS (see release.yaml's listener block), so this is
+# passthrough rather than normal HTTP ingress TLS termination -- standard
+# HashiCorp guidance is not to put Vault's API behind a TLS-terminating
+# proxy.
+apiVersion: traefik.io/v1alpha1
+kind: IngressRouteTCP
+metadata:
+  name: vault
+  namespace: vault
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: HostSNI(`vault.k8s-homelab.local`)
+      services:
+        - name: vault
+          port: 8200
+  tls:
+    passthrough: true

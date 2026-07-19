@@ -13,6 +13,7 @@ locals {
     # actual routing once traffic arrives.
     k8s_homelab_grafana  = { domain = "grafana.k8s-homelab.local", ip = "10.4.0.200" }
     k8s_homelab_demo_app = { domain = "demo-app.k8s-homelab.local", ip = "10.4.0.200" }
+    k8s_homelab_vault    = { domain = "vault.k8s-homelab.local", ip = "10.4.0.200" }
   }
 }
 
