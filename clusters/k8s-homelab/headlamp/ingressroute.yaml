@@ -1,20 +1,30 @@
 # Cluster-admin-scoped UI (see rbac.yaml) -- basic-auth middleware added
 # as a second layer in front of Headlamp's own token login (dev's copy of
 # this app had no such layer; not carried forward here).
+#
+# dashboard.jacobbanghart.com is dev's original public hostname for this
+# app (real Cloudflare A record already existed, unchanged, pointing at
+# the shared public IP -- the port-forward cutover routes it here now).
+# Missed carrying this over during the initial Wave 0 migration, which
+# only added the new headlamp.k8s-homelab.jacobbanghart.com name; broke
+# dashboard.jacobbanghart.com until this fix. Kept both hostnames working
+# now. Not excluded from external-dns for this specific record since its
+# DNS content was already correct and unowned -- no need to touch it.
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
 metadata:
   name: headlamp
   namespace: headlamp
   annotations:
-    # Internal admin tool, resolved via Pi-hole only -- keep it off
-    # external-dns's public Cloudflare records.
+    # Internal admin tool (headlamp.k8s-homelab...) resolved via Pi-hole
+    # only -- keep external-dns from touching that name. It doesn't
+    # exclude dashboard.jacobbanghart.com, which is a real public record.
     external-dns.alpha.kubernetes.io/exclude: "true"
 spec:
   entryPoints:
     - websecure
   routes:
-    - match: Host(`headlamp.k8s-homelab.jacobbanghart.com`)
+    - match: Host(`headlamp.k8s-homelab.jacobbanghart.com`) || Host(`dashboard.jacobbanghart.com`)
       kind: Rule
       middlewares:
         - name: basic-auth
@@ -39,6 +49,7 @@ spec:
     size: 256
   dnsNames:
     - headlamp.k8s-homelab.jacobbanghart.com
+    - dashboard.jacobbanghart.com
   issuerRef:
     name: letsencrypt-cloudflare
     kind: ClusterIssuer
