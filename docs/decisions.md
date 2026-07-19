@@ -789,3 +789,32 @@ LB in one change, verify all apps still resolve correctly through it,
 external-dns exclusions app by app. Internal-only tools (already on
 Pi-hole-only resolution, no public DNS involved) are unaffected by any
 of this and don't need the exclusion pattern.
+
+## Personal app workloads moved out to a second Flux source (2026-07-19)
+
+Realized mid-migration (after `excalidraw`/`speedtest`/`github-runner`
+were already committed here): this repo's actual goal is a genericized,
+shareable "clone and run on your own Proxmox+UniFi" cluster bootstrap +
+core tooling project, not a place for personal app configs (specific
+hostnames on `jacobbanghart.com`, specific GitHub repos/orgs, personal
+GitHub App credentials). Those three apps directly conflicted with that
+goal and were moved out.
+
+**New structure**: personal workloads live in the `flux` repo (the same
+repo that manages the `dev` cluster) under a new path,
+`clusters/k8s-homelab-apps/` -- reusing that existing repo rather than
+creating a third one, since it's already the natural home for "my own
+stuff running on my own clusters" and will eventually cover both
+clusters as `dev` gets decommissioned. A second Flux source was added
+to this cluster to consume it: `clusters/k8s-homelab/flux-apps/`
+(`GitRepository` + `Kustomization`, its own read-only deploy key
+`flux-apps-repo-key`) -- entirely independent of this repo's own
+bootstrap `GitRepository`, so a clone of this repo either points that
+second source at their own apps repo or deletes the directory outright.
+
+**Kept in this repo** (judged as genuinely generic tooling, not
+personal): `headlamp` (K8s dashboard) and `demo-app` (Homepage-based
+status page) -- both still have `jacobbanghart.com` hardcoded into
+their hostnames today, which a cloner would need to edit; not yet
+templated/parameterized, tracked as a follow-up, not done as part of
+this split.
