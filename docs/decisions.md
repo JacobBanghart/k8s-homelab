@@ -739,3 +739,53 @@ No auth in front of it (same as Grafana/Vault's own auth, not
 double-gated) -- acceptable for a same-network dashboard with no
 sensitive data of its own; it only links out to other services that
 have their own auth.
+
+## Public app cutover is one router-level event, not per-app DNS (2026-07-19)
+
+Discovered mid-migration (excalidraw, Wave 1): dev's internet-facing apps
+(`excalidraw`, `speedtest`, `portfolio`, `home-assistant`, `jellyfin`,
+`mealie`, `nextcloud`, `invoice-ninja`, `immich`, `vaultwarden`, `files`)
+aren't individually port-forwarded. There's a single UniFi rule
+(`UnifiTerraform/port_forwards.tf`, "All things to the dev server", port
+443 -> dev's Traefik) that forwards *all* public HTTPS traffic to one
+internal IP; Traefik's own Host-header routing is what actually
+disambiguates which app a request is for. The public Cloudflare A records
+(e.g. `excalidraw.jacobbanghart.com` -> `68.170.78.3`, the home's public
+IP) never change per-app -- only where that one router rule points does.
+
+This means public traffic cutover for these apps can only happen as a
+**single event, once every public app is verified working on
+k8s-homelab** -- not incrementally per app like the internal/admin tools
+(Vault, Grafana, headlamp, demo-app) or Wave 0 already did. Migrating one
+app's Ingress/DNS in isolation just breaks that app (traffic still
+lands on dev's Traefik, which no longer has a route for it) without
+actually moving anything to k8s-homelab, since the port-forward itself
+hasn't moved.
+
+**Incident from this discovery:** removing dev's `excalidraw` Ingress
+(to release its DNS ownership for what was assumed to be a normal
+per-app cutover) caused a live outage -- confirmed via
+`curl https://excalidraw.jacobbanghart.com` returning a 404 from dev's
+Traefik with no path to k8s-homelab. Compounded by a second near-miss:
+the stale TXT ownership record for that hostname was re-stamped to
+`owner=k8s-homelab` to "fix" DNS management, which would have caused
+k8s-homelab's own `external-dns` (policy `sync`) to flip the *live
+public* A record to `10.4.0.200` (a private VLAN 30 address, unreachable
+from the internet) on its own next sync cycle -- an entirely
+self-inflicted second outage on top of the first. Both reverted; dev's
+`excalidraw` Ingress/Deployment restored to serving traffic, TXT record
+restored to its original (harmless but orphaned, `owner=default`)
+content.
+
+**Revised approach for Wave 1-4 (public apps only):** deploy and verify
+each app on k8s-homelab (via `curl --resolve host:443:10.4.0.200`,
+bypassing public DNS entirely for testing), but add
+`external-dns.alpha.kubernetes.io/exclude: "true"` on its IngressRoute
+and leave dev's copy fully live and untouched -- no Ingress removal, no
+Deployment scale-down -- until every public app has been verified ready.
+Only then: flip `port_forwards.tf`'s target IP to k8s-homelab's Traefik
+LB in one change, verify all apps still resolve correctly through it,
+*then* go back and decommission dev's copies and lift the
+external-dns exclusions app by app. Internal-only tools (already on
+Pi-hole-only resolution, no public DNS involved) are unaffected by any
+of this and don't need the exclusion pattern.
