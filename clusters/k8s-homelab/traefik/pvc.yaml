@@ -1,0 +1,17 @@
+# ACME storage (acme-cloudflare.json) for Traefik's Cloudflare DNS-01
+# cert resolver -- mirrors flux's traefik PVC, but RWX (ceph-filesystem)
+# instead of RWO: this cluster's Traefik runs 3 replicas (one per node,
+# for zero-downtime drains) that all need to share the same acme.json,
+# unlike flux's single-replica Traefik.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ssl-certs
+  namespace: traefik
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: ceph-filesystem
+  resources:
+    requests:
+      storage: 1Gi

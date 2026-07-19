@@ -98,7 +98,38 @@ spec:
             csi.storage.k8s.io/node-stage-secret-namespace: rook-ceph
             csi.storage.k8s.io/fstype: ext4
 
-    cephFileSystems: []
+    # RWX storage -- needed so Traefik's 3 replicas (one per node, for
+    # zero-downtime drains) can share one ACME-storage volume for
+    # Cloudflare DNS-01 cert issuance. Same replication factor as
+    # cephBlockPools above. 2 MDS (1 active + 1 standby) for its own HA,
+    # matching the "no single point of failure" pattern used throughout
+    # this cluster.
+    cephFileSystems:
+      - name: cephfs
+        spec:
+          metadataPool:
+            replicated:
+              size: 3
+          dataPools:
+            - name: data0
+              failureDomain: host
+              replicated:
+                size: 3
+          metadataServer:
+            activeCount: 1
+            activeStandby: true
+        storageClass:
+          enabled: true
+          name: ceph-filesystem
+          reclaimPolicy: Delete
+          allowVolumeExpansion: true
+          parameters:
+            csi.storage.k8s.io/provisioner-secret-name: rook-csi-cephfs-provisioner
+            csi.storage.k8s.io/provisioner-secret-namespace: rook-ceph
+            csi.storage.k8s.io/controller-expand-secret-name: rook-csi-cephfs-provisioner
+            csi.storage.k8s.io/controller-expand-secret-namespace: rook-ceph
+            csi.storage.k8s.io/node-stage-secret-name: rook-csi-cephfs-node
+            csi.storage.k8s.io/node-stage-secret-namespace: rook-ceph
     cephObjectStores: []
 
     toolbox:
