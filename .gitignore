@@ -36,6 +36,16 @@ unifi/*.auto.tfvars
 unifi/crash.log
 unifi/crash.*.log
 
+# AWS KMS Terraform (terraform-aws-kms/) -- Vault auto-unseal key
+terraform-aws-kms/.terraform/
+terraform-aws-kms/*.tfstate
+terraform-aws-kms/*.tfstate.*
+terraform-aws-kms/terraform.tfvars
+terraform-aws-kms/*.auto.tfvars
+terraform-aws-kms/crash.log
+terraform-aws-kms/crash.*.log
+terraform-aws-kms/tfplan
+
 # OS/editor cruft
 .DS_Store
 *.swp
