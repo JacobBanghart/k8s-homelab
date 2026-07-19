@@ -933,3 +933,37 @@ scale the application deployment(s) to 0 *before* the database ever
 comes up for the first time, restore into a database no app has ever
 touched, and only then scale the app back up -- don't assume an app
 won't auto-migrate an empty schema just because the last one didn't.
+Applied this immediately on the very next migration (invoice-ninja,
+below) and it worked cleanly the first time.
+
+## Migration wrap-up: dev decommissioned from the public path (2026-07-19)
+
+All of dev's public-facing apps are now migrated: excalidraw, speedtest,
+vaultwarden, mealie, home-assistant/esphome/mosquitto, nextcloud,
+filebrowser, jellyfin, immich, portfolio, invoice-ninja, plus the
+Wave 0 infra (external-dns, headlamp) and Wave 1 github-runner (ARC).
+The UniFi port-forward (`UnifiTerraform/port_forwards.tf`) was flipped
+from dev's IP to k8s-homelab's Traefik LB (`10.4.0.200`) as the actual
+cutover -- confirmed live: all migrated apps reachable on their real
+public hostnames, and invoice-ninja/portfolio correctly 404'd (Traefik's
+default cert, no matching route) in the brief window before they were
+migrated too, proving the cutover really moved traffic rather than
+silently still hitting dev.
+
+invoice-ninja hit the exact same MariaDB-vs-Postgres version of two
+earlier lessons: `image.tag: "latest"` had let its live MariaDB version
+drift far ahead of on-disk system tables (never `mariadb-upgrade`d),
+breaking `mysqldump --routines` outright (worked around with
+`--skip-routines --skip-triggers`, safe since this Laravel app doesn't
+use stored DB routines) -- and its app pod auto-ran fresh-install schema
+migrations before the restore, exactly like Immich. Applying that
+lesson immediately (scale to 0, `DROP DATABASE`/recreate, restore,
+scale back up) worked cleanly on the first attempt this time.
+
+Remaining before `dev` itself can be decommissioned: nothing currently
+depends on it for public traffic, but its VM/workloads are still
+running as a safety net and haven't been deleted. Decommissioning the
+VM (freeing its 96 vCPU/64GB back to the Proxmox host) is deliberately
+a separate, later step requiring its own explicit go-ahead -- not
+bundled into this migration -- once everything's been confirmed stable
+for a while.
