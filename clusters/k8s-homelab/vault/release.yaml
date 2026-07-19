@@ -22,11 +22,20 @@ spec:
     remediation:
       retries: 3
   values:
-    # No injector -- the only consumer is the primary "dev" cluster, an
-    # entirely separate cluster External Secrets Operator talks to over
-    # the network (AppRole auth), not pods running inside this cluster.
+    # No injector -- no in-cluster consumers wired up yet (deferred,
+    # see docs/decisions.md).
     injector:
       enabled: false
+
+    # Chart default assumes TLS disabled and wires VAULT_ADDR / the
+    # readiness+liveness probe exec commands to plain HTTP accordingly --
+    # even with a fully custom server.ha.raft.config (which is HTTPS-only),
+    # that default still applies unless this is set. Without it, every
+    # pod's probes hit http://127.0.0.1:8200 against an HTTPS-only
+    # listener and permanently report NotReady despite Vault itself being
+    # healthy and unsealed.
+    global:
+      tlsDisable: false
 
     server:
       resources:
