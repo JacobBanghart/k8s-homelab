@@ -1,0 +1,35 @@
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: headlamp
+  namespace: headlamp
+spec:
+  interval: 10m
+  chart:
+    spec:
+      chart: headlamp
+      version: "*"
+      sourceRef:
+        kind: HelmRepository
+        name: headlamp
+        namespace: headlamp
+  install:
+    remediation:
+      retries: 3
+  upgrade:
+    remediation:
+      retries: 3
+  values:
+    replicaCount: 1
+    # Ingress handled separately via ingressroute.yaml (Traefik CRD,
+    # cert-manager TLS, basic-auth middleware), not this chart's own
+    # plain Ingress support.
+    ingress:
+      enabled: false
+    resources:
+      requests:
+        memory: "128Mi"
+        cpu: "100m"
+      limits:
+        memory: "512Mi"
+        cpu: "1000m"

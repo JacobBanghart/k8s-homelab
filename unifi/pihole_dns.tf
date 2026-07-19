@@ -21,6 +21,11 @@ locals {
     k8s_homelab_grafana_real  = { domain = "grafana.k8s-homelab.jacobbanghart.com", ip = "10.4.0.200" }
     k8s_homelab_demo_app_real = { domain = "demo-app.k8s-homelab.jacobbanghart.com", ip = "10.4.0.200" }
     k8s_homelab_vault_real    = { domain = "vault.k8s-homelab.jacobbanghart.com", ip = "10.4.0.200" }
+
+    # headlamp migrated in from dev as an infra/platform tool (Wave 0 of
+    # the dev-cluster migration) -- real hostname from the start, no
+    # .local placeholder needed since this app never had one on dev.
+    k8s_homelab_headlamp = { domain = "headlamp.k8s-homelab.jacobbanghart.com", ip = "10.4.0.200" }
   }
 }
 
