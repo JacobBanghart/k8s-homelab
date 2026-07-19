@@ -836,3 +836,41 @@ migration jobs mount explicitly as `nfs4`, so portmapper/111 isn't
 needed). Verified via a throwaway pod: TrueNAS:2049 now reachable,
 dev's SSH (10.1.0.34:22, a different Internal host/port) still times
 out as expected -- no broader hole opened.
+
+## Home Assistant/ESPHome mDNS discovery gap on k8s-homelab (2026-07-19, open)
+
+Migrated Home Assistant + ESPHome + mosquitto (Wave 2) with the same
+`hostNetwork: true` dev used for mDNS discovery of WiFi smart plugs /
+ESPHome OTA. Assumed `multicast_dns = true` (already set on k8s-lab's
+network, `unifi/vlans.tf`) would provide UniFi's mDNS reflection across
+VLANs -- **verified empirically that it does not**. A raw mDNS query
+sent from an HA pod (hostNetwork, landed on `k8s-worker-0`) only got
+responses from the k8s-lab gateway (`10.4.0.1`) and other k8s-lab nodes
+themselves; nothing from real device IPs on the primary/IoT VLAN.
+
+Root cause: modern UniFi controllers have a **separate, global**
+"Multicast DNS" reflection toggle (Settings -> Networks -> Multicast
+DNS in the UniFi app) that actually bridges mDNS across VLANs --
+distinct from the per-network `multicast_dns` flag already set (which
+appears to just permit/enable mDNS traffic within that one VLAN, not
+reflect it elsewhere). This global setting isn't exposed by the
+`unifi_setting` Terraform resource in the provider version this repo
+uses -- checked the schema directly, no mdns/multicast fields present.
+Can't fix via Terraform; needs manual toggling in the UniFi app UI.
+
+**Left open deliberately** (user's call, 2026-07-19): HA and ESPHome's
+web UIs both work correctly on k8s-homelab (verified via
+`curl --resolve`) and already-configured device entities should keep
+working (mDNS is mainly used for *initial* discovery, not ongoing
+communication) -- only *new*-device discovery is affected. Revisit once
+the UniFi-side global setting is checked/enabled, or once `dev` is
+fully decommissioned and this becomes moot for a different reason
+(no more dual-cluster confusion about which instance should discover
+what).
+
+Same underlying VLAN-isolation gap likely also affects mosquitto's
+NodePort (`31883`) -- IoT-VLAN devices publishing to k8s-homelab's
+MQTT broker would need k8s-lab's ZBF policy to allow it, same as the
+TrueNAS NFS exception above. Not yet verified either way (can't test
+cross-VLAN reachability from IoT's side without a device there); flagged
+as the same class of open gap, not separately investigated.
