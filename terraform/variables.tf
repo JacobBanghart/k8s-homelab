@@ -92,3 +92,9 @@ variable "ceph_osd_disk_size" {
   type        = number
   default     = 100
 }
+
+variable "ceph_osd_disk_size_2" {
+  description = "Size in GB of the second dedicated raw block device added to each worker for Rook/Ceph OSDs"
+  type        = number
+  default     = 200
+}

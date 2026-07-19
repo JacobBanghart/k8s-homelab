@@ -37,6 +37,17 @@ resource "proxmox_virtual_environment_vm" "worker" {
     size         = var.ceph_osd_disk_size
   }
 
+  # Second OSD disk added ahead of the dev-cluster migration -- original
+  # 100GB/worker (300GB raw, ~81GiB usable after 3x replication) was too
+  # tight against dev's real data footprint (~75-90GB). Additive rather
+  # than resizing the existing scsi1 disks live, to avoid any risk to
+  # already-written OSD data.
+  disk {
+    datastore_id = var.storage_pool
+    interface    = "scsi2"
+    size         = var.ceph_osd_disk_size_2
+  }
+
   network_device {
     bridge  = "vmbr0"
     vlan_id = var.vlan_tag

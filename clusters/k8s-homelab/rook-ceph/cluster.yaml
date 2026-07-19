@@ -42,7 +42,11 @@ spec:
       storage:
         useAllNodes: true
         useAllDevices: false
-        deviceFilter: "^sdb$"
+        # sdc added ahead of the dev-cluster migration -- original 3x100GB
+        # (one per worker) was too tight against dev's real data footprint
+        # once measured directly. See terraform/vms-workers.tf
+        # ceph_osd_disk_size_2 and docs/decisions.md.
+        deviceFilter: "^sd[bc]$"
       resources:
         mgr:
           limits:
