@@ -681,3 +681,25 @@ shares + root token were recorded by hand (not written to any file on
 this or any cluster-adjacent machine) and are stored offline per the
 original decision. Lesson: confirm the physical copy is complete and
 legible *before* destroying the digital source, not after.
+
+## ESO ClusterSecretStore: wrong secret key + stale controller cache, two separate bugs stacked
+
+Standing up `vault-backend` hit two distinct failures that looked like
+one: `ClusterSecretStore` sat in `InvalidProviderConfig` /
+`cannot set Vault CA certificate: failed to parse certificates from
+CertPool` the whole time. First bug: the CA cert was extracted from
+`k8s-homelab-ca-cert` (in the `vault` namespace) using the key `ca.crt`,
+copying the pattern from `vault/serverstransport.yaml` -- but that
+secret actually stores it under `tls.ca` (cert-manager's own key
+convention for this secret, not `ca.crt`/`tls.crt`/`tls.key`), so the
+copied secret in `external-secrets` had an empty `ca.crt` value. Fixed
+by re-extracting with the right key. Second bug, which made the first
+fix look like it hadn't worked: after correcting the secret in place
+(delete + recreate), the ESO controller kept failing with the *identical*
+error for several more reconcile cycles -- its in-memory secret cache
+hadn't picked up the change. A plain `kubectl rollout restart
+deployment/external-secrets` (forcing a fresh informer sync on startup)
+cleared it immediately, `Ready: True`. Lesson: after fixing a
+secret an already-running controller depends on, don't just wait for
+its next reconcile loop to declare victory -- check whether the error is
+actually re-evaluating fresh data or repeating a cached failure.

@@ -326,9 +326,24 @@ VAULT_SKIP_VERIFY=true VAULT_TOKEN=$VAULT_TOKEN vault write auth/kubernetes/role
 
 The `ClusterSecretStore` (`vault-backend`) trusts Vault's internal CA via
 a `k8s-homelab-ca-cert` secret copied into the `external-secrets`
-namespace (public cert only, same extraction pattern as
-`vault/serverstransport.yaml` -- never copy the CA secret that holds the
-private key).
+namespace (public cert only -- never copy the CA secret that holds the
+private key). The source secret (in the `vault` namespace) stores the
+cert under the key **`tls.ca`**, not `ca.crt` -- easy to get wrong by
+copying the `vault/serverstransport.yaml` pattern verbatim, which uses
+a different secret shape. Extract and recreate it as:
+
+```bash
+kubectl --context k8s-homelab -n vault get secret k8s-homelab-ca-cert \
+  -o jsonpath='{.data.tls\.ca}' | base64 -d > /tmp/ca.crt
+kubectl --context k8s-homelab -n external-secrets create secret generic \
+  k8s-homelab-ca-cert --from-file=ca.crt=/tmp/ca.crt
+rm /tmp/ca.crt
+```
+
+If you fix this secret after the ESO controller is already running,
+`kubectl rollout restart deployment/external-secrets` -- its informer
+cache won't pick up the change on its own, and it'll keep reporting the
+same stale `InvalidProviderConfig` error otherwise.
 
 Checking it's working:
 
