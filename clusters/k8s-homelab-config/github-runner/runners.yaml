@@ -1,0 +1,118 @@
+# Migrated from dev cluster (Wave 1 of the dev->k8s-homelab migration,
+# see docs/decisions.md). No public hostname/ingress involved -- CI
+# runners only make outbound connections to GitHub, so none of the
+# port-forward/DNS cutover concerns from the other Wave 1 apps apply
+# here.
+#
+# Shared runner for BackToSafety repository
+# Docker enabled to support image builds
+apiVersion: actions.summerwind.dev/v1alpha1
+kind: RunnerDeployment
+metadata:
+  name: shared-runner
+  namespace: actions-runner-system
+spec:
+  replicas: 1
+  template:
+    spec:
+      repository: JacobBanghart/BackToSafety
+      labels:
+        - self-hosted
+        - linux
+      dockerEnabled: true
+      resources:
+        limits:
+          cpu: "8"
+          memory: 8Gi
+        requests:
+          cpu: "100m"
+          memory: 128Mi
+      ephemeral: true
+---
+apiVersion: actions.summerwind.dev/v1alpha1
+kind: HorizontalRunnerAutoscaler
+metadata:
+  name: shared-runner-autoscaler
+  namespace: actions-runner-system
+spec:
+  scaleTargetRef:
+    name: shared-runner
+  minReplicas: 1
+  maxReplicas: 2
+  metrics:
+    - type: TotalNumberOfQueuedAndInProgressWorkflowRuns
+      repositoryNames:
+        - JacobBanghart/BackToSafety
+---
+# Runner for ReclaimerGold/Ferrix -- capped at 4 cores / 4Gi per runner.
+# Fixed replicas: HRA not viable since ARC 0.23.x's HRA always uses the
+# controller's default installation, which can't cross org boundaries
+# to ReclaimerGold (see githubAPICredentialsFrom below).
+apiVersion: actions.summerwind.dev/v1alpha1
+kind: RunnerDeployment
+metadata:
+  name: ferrix-runner
+  namespace: actions-runner-system
+spec:
+  replicas: 4
+  template:
+    spec:
+      repository: ReclaimerGold/rdn-pve-manager
+      labels:
+        - self-hosted
+        - linux
+      dockerEnabled: true
+      resources:
+        limits:
+          cpu: "4"
+          memory: 4Gi
+        requests:
+          cpu: "100m"
+          memory: 128Mi
+      githubAPICredentialsFrom:
+        secretRef:
+          name: ferrix-runner-secret
+      # Dev's version of this used per-node hostPath caches (single-node
+      # cluster, always the same disk). k8s-homelab has 3 workers and an
+      # ephemeral runner pod can land on any of them, so hostPath would
+      # give inconsistent cache hits -- switched to a shared
+      # ceph-filesystem (RWX) PVC instead so the cache is consistent
+      # regardless of which worker schedules the pod.
+      volumeMounts:
+        - name: tool-cache
+          mountPath: /opt/hostedtoolcache
+        - name: npm-cache
+          mountPath: /cache/npm
+      volumes:
+        - name: tool-cache
+          persistentVolumeClaim:
+            claimName: ferrix-tool-cache
+        - name: npm-cache
+          persistentVolumeClaim:
+            claimName: ferrix-npm-cache
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ferrix-tool-cache
+  namespace: actions-runner-system
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: ceph-filesystem
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ferrix-npm-cache
+  namespace: actions-runner-system
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: ceph-filesystem
+  resources:
+    requests:
+      storage: 5Gi
