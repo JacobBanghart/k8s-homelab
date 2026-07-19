@@ -93,10 +93,18 @@ spec:
       enabled: true
       maxUnavailable: 1
 
+    # Bumped from 128Mi/256Mi (2026-07-19) -- all 3 replicas were
+    # OOMKilling repeatedly under real traffic. 256Mi is too tight once
+    # Traefik is terminating TLS for a dozen+ hostnames plus running
+    # speedtest's buffering Middleware, which holds each response fully
+    # in memory up to its 35MB cap -- a large streamed download (e.g. an
+    # OpenSpeedTest transfer) tips a replica over the limit, gets killed
+    # mid-stream, and looks like a dead connection/bad speed client-side
+    # even though the pod comes back up within seconds.
     resources:
       requests:
         cpu: "100m"
-        memory: "128Mi"
-      limits:
-        cpu: "500m"
         memory: "256Mi"
+      limits:
+        cpu: "1000m"
+        memory: "1Gi"
