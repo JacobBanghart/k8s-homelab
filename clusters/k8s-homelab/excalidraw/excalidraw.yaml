@@ -67,6 +67,15 @@ kind: IngressRoute
 metadata:
   name: excalidraw
   namespace: excalidraw
+  annotations:
+    # Public traffic cutover is a single router-level event (one shared
+    # port-forward rule -> Traefik, not per-app DNS -- see
+    # docs/decisions.md), not per-app. Keep this excluded from
+    # external-dns until that real cutover happens, or it'll flip the
+    # live public DNS record to this cluster before dev's Traefik is
+    # actually taken out of the path -- already caused one live outage
+    # this way, twice (once by hand, once by external-dns itself).
+    external-dns.alpha.kubernetes.io/exclude: "true"
 spec:
   entryPoints:
     - websecure
