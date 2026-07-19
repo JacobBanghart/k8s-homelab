@@ -12,14 +12,12 @@ locals {
     # here per app -- Traefik's IngressRoute/Ingress host rule does the
     # actual routing once traffic arrives.
     k8s_homelab_grafana  = { domain = "grafana.k8s-homelab.local", ip = "10.4.0.200" }
-    k8s_homelab_demo_app = { domain = "demo-app.k8s-homelab.local", ip = "10.4.0.200" }
     k8s_homelab_vault    = { domain = "vault.k8s-homelab.local", ip = "10.4.0.200" }
 
     # Real Cloudflare-issued certs now (see traefik/release.yaml) --
     # temporary domain until each app migrates to its real final
     # hostname. Old .local records above left in place, not cleaned up.
     k8s_homelab_grafana_real  = { domain = "grafana.k8s-homelab.jacobbanghart.com", ip = "10.4.0.200" }
-    k8s_homelab_demo_app_real = { domain = "demo-app.k8s-homelab.jacobbanghart.com", ip = "10.4.0.200" }
     k8s_homelab_vault_real    = { domain = "vault.k8s-homelab.jacobbanghart.com", ip = "10.4.0.200" }
 
     # headlamp migrated in from dev as an infra/platform tool (Wave 0 of
