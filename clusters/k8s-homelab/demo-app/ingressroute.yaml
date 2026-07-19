@@ -3,6 +3,10 @@ kind: IngressRoute
 metadata:
   name: demo-app
   namespace: demo-app
+  annotations:
+    # Internal dashboard, resolved via Pi-hole only -- keep it off
+    # external-dns's public Cloudflare records.
+    external-dns.alpha.kubernetes.io/exclude: "true"
 spec:
   entryPoints:
     - websecure
