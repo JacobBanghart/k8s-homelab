@@ -703,3 +703,39 @@ cleared it immediately, `Ready: True`. Lesson: after fixing a
 secret an already-running controller depends on, don't just wait for
 its next reconcile loop to declare victory -- check whether the error is
 actually re-evaluating fresh data or repeating a cached failure.
+
+## demo-app: replaced nginx placeholder with a real Homepage dashboard
+
+The `demo-app` namespace originally held a placeholder nginx Deployment
+serving a static empty volume -- built early on just to prove out the
+cert-manager/Traefik ingress pattern before real apps existed.
+Flagged (2026-07-18): "that shouldn't be a demo app that should be a
+full build out of a core service."
+
+**Resolved 2026-07-19**: replaced with [Homepage](https://gethomepage.dev)
+(`jameswynn/homepage` chart), a self-hosted dashboard rather than a
+hand-built page -- config-driven (services/widgets defined entirely in
+the HelmRelease's `values`, no custom code to maintain), active
+upstream project, and its Kubernetes widget gives real cluster-wide
+pod/node CPU+memory stats out of the box. Deliberately did *not* enable
+per-Deployment auto-discovery (the `gethomepage.dev/enabled` annotation
+pattern) since that would mean editing every other app's manifests;
+instead the service tiles (currently Vault, Grafana) are declared
+directly in `demo-app/release.yaml` and get free up/down status checks
+from Homepage's own HTTP polling. More tiles get added here as
+`serverk8sdeploywithk3s` workloads eventually migrate onto this cluster.
+
+Namespace name, directory name, and hostname
+(`demo-app.k8s-homelab.jacobbanghart.com`) were all left as-is on
+purpose -- renaming any of them would mean a Pi-hole DNS Terraform
+change (`unifi/pihole_dns.tf`) and cert reissue for no functional
+benefit. The "demo-app" name is now purely cosmetic/legacy; it doesn't
+reflect what's actually running there.
+
+Dropped the old `ceph-block` PVC entirely -- Homepage is stateless,
+all its config lives in Helm values (i.e. in git), nothing to persist.
+
+No auth in front of it (same as Grafana/Vault's own auth, not
+double-gated) -- acceptable for a same-network dashboard with no
+sensitive data of its own; it only links out to other services that
+have their own auth.
