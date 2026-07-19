@@ -874,3 +874,41 @@ MQTT broker would need k8s-lab's ZBF policy to allow it, same as the
 TrueNAS NFS exception above. Not yet verified either way (can't test
 cross-VLAN reachability from IoT's side without a device there); flagged
 as the same class of open gap, not separately investigated.
+
+## Nextcloud's k8s Secret had already drifted from its real live credentials (2026-07-19)
+
+Discovered migrating Nextcloud's Postgres (Wave 2): the `nextcloud`
+namespace's `nextcloud-postgres-secret` on `dev` (`POSTGRES_USER=nextcloud`
++ some password) did **not** match the credentials Nextcloud's own
+`config/config.php` actually uses to connect (`dbuser: oc_jqwop`, a
+different password entirely) -- confirmed by comparing SHA-256 hashes of
+each value, not by exposing either in plaintext. This wasn't caused by
+the migration; it was already true on `dev` before this session touched
+it. Likely explanation: Postgres's `POSTGRES_USER`/`POSTGRES_PASSWORD`
+env vars only take effect at first `initdb` on an empty data directory --
+if the k8s Secret's value was ever changed after that (a well-intentioned
+"rotation" that only updated the Secret object, not the live Postgres
+role's actual password via `ALTER USER`), the two silently diverge and
+nothing detects it until something needs to reconnect from scratch, which
+routine operation never does.
+
+Fixed on `k8s-homelab`'s copy: extracted the real password from
+`config.php` (via `php -r` printing to a file, never displayed in any
+tool output), created the correct `oc_jqwop` role with it, granted it
+full privileges on the restored tables/sequences (ownership reassignment
+itself failed -- `nextcloud`, the pg_restore connection role, couldn't
+transfer ownership of some database-owned objects; explicit grants +
+default-privilege grants for future objects were used instead), then
+updated Vault's copy of `nextcloud-postgres-secret` to the real
+`oc_jqwop`/correct-password pair so it's no longer wrong going forward.
+Didn't touch `dev`'s own (still-wrong-but-functionally-irrelevant) Secret
+object -- out of scope for this migration, and correcting it there risks
+nothing since `config.php` never re-reads it anyway.
+
+**Relevant to Workstream 4** (`serverk8sdeploywithk3s` secret rotation):
+this is concrete evidence that at least one existing k8s Secret in this
+homelab's fleet is already silently wrong relative to what's actually
+live. Worth verifying each secret's value actually matches its
+consumer's real, working credential -- not just copying the Secret
+object's current content into Vault and assuming it's correct -- when
+that workstream picks up.
