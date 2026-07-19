@@ -23,3 +23,5 @@ spec:
           port: 8200
           scheme: https
           serversTransport: vault-backend
+  tls:
+    secretName: vault-external-tls

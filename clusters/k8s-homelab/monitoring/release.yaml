@@ -88,12 +88,12 @@ spec:
         ingressClassName: traefik
         hosts:
           - grafana.k8s-homelab.jacobbanghart.com
-        # No secretName -- Traefik's Cloudflare DNS-01 cert resolver
-        # issues a real cert on-demand for whatever Host() it sees.
-        # Temporary domain until this app is migrated to its real
-        # final hostname.
+        # secretName matches certificate.yaml's cert-manager Certificate
+        # (real Let's Encrypt cert via Cloudflare DNS-01). Temporary
+        # domain until this app is migrated to its real final hostname.
         tls:
-          - hosts:
+          - secretName: grafana-tls
+            hosts:
               - grafana.k8s-homelab.jacobbanghart.com
       resources:
         requests:

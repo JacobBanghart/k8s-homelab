@@ -1,0 +1,24 @@
+# Real cert for Vault's EXTERNAL-facing hostname (what Traefik presents
+# to clients via ingressroute.yaml's bridging). Distinct from
+# certificate.yaml's vault-tls, which is Vault's own INTERNAL listener
+# cert (self-signed CA, unchanged) -- these are two separate TLS
+# identities on two separate legs of the same connection, see
+# serverstransport.yaml.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: vault-external-tls
+  namespace: vault
+spec:
+  secretName: vault-external-tls
+  duration: 2160h # 90d
+  renewBefore: 360h # 15d
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  dnsNames:
+    - vault.k8s-homelab.jacobbanghart.com
+  issuerRef:
+    name: letsencrypt-cloudflare
+    kind: ClusterIssuer
+    group: cert-manager.io

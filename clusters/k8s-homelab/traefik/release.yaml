@@ -22,14 +22,19 @@ spec:
     remediation:
       retries: 3
   values:
-    # Real certs via Cloudflare DNS-01 (jacobbanghart.com), same mechanism
-    # and account as flux/clusters/k3s-cluster/traefik/traefik.yaml --
-    # apps get a temporary *.k8s-homelab.jacobbanghart.com namespace until
-    # they're migrated to their real final hostnames. On-demand per-Host()
-    # issuance, no static wildcard, matching flux (no default TLSStore
-    # anymore -- see clusters/k8s-homelab-config/cert-manager/wildcard-cert.yaml's
-    # removal). The self-signed k8s-homelab-ca-issuer still exists for
-    # Vault's own internal listener cert (unrelated to this).
+    # Real certs via cert-manager's ACME/Cloudflare DNS-01 ClusterIssuer
+    # (clusters/k8s-homelab-config/cert-manager/letsencrypt-cloudflare-issuer.yaml),
+    # not Traefik's own built-in ACME -- the traefik chart hard-rejects
+    # enabling its built-in ACME with more than 1 replica
+    # ("You can not enable acme if you set more than one traefik replica"),
+    # which conflicts with the 3-replica zero-downtime-drain setup below.
+    # cert-manager sidesteps this entirely: issued certs are stored as
+    # regular Kubernetes Secrets, naturally available to all 3 replicas via
+    # etcd, no shared file/storage needed. Each app gets its own explicit
+    # Certificate resource + secretName (same explicit pattern the old
+    # self-signed setup used), not a static default -- apps get a
+    # temporary *.k8s-homelab.jacobbanghart.com namespace until they're
+    # migrated to their real final hostnames.
     ingressClass:
       enabled: true
       isDefaultClass: true
@@ -51,53 +56,11 @@ spec:
         http:
           tls:
             enabled: true
-            certResolver: cloudflare
 
-    persistence:
-      enabled: true
-      name: ssl-certs
-      path: /ssl-certs
-      size: 1Gi
-      existingClaim: ssl-certs
-
-    env:
-      - name: CF_API_EMAIL
-        valueFrom:
-          secretKeyRef:
-            name: cloudflare-credentials
-            key: email
-      - name: CF_API_KEY
-        valueFrom:
-          secretKeyRef:
-            name: cloudflare-credentials
-            key: apiKey
-
-    additionalArguments:
-      - "--certificatesresolvers.cloudflare.acme.dnschallenge.provider=cloudflare"
-      - "--certificatesresolvers.cloudflare.acme.email=jacobmbanghart@gmail.com"
-      - "--certificatesresolvers.cloudflare.acme.dnschallenge.resolvers=1.1.1.1"
-      - "--certificatesresolvers.cloudflare.acme.storage=/ssl-certs/acme-cloudflare.json"
-
-    # Traefik refuses to use the ACME store unless it's exactly 0600 --
-    # matters more here than in flux's single-replica setup, since all 3
-    # replicas share the same RWX volume and any permission drift on one
-    # would affect the others. Matches flux's proven workaround.
+    # 3 replicas, one per worker, so draining any single node still leaves
+    # 2 ready endpoints -- zero-downtime drains instead of a gap while a
+    # single replacement pod reschedules and passes its readiness probe.
     deployment:
-      initContainers:
-        - name: volume-permissions
-          image: busybox:1.38.0
-          command:
-            - sh
-            - -c
-            - chmod -Rv 600 /ssl-certs/* || echo oops
-          volumeMounts:
-            - name: ssl-certs
-              mountPath: /ssl-certs
-
-      # 3 replicas, one per worker, so draining any single node still
-      # leaves 2 ready endpoints -- zero-downtime drains instead of a gap
-      # while a single replacement pod reschedules and passes its
-      # readiness probe.
       replicas: 3
 
     # Default surge-first rollout (maxSurge:1, maxUnavailable:0) deadlocks
