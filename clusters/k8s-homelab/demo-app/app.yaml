@@ -67,7 +67,7 @@ spec:
   entryPoints:
     - websecure
   routes:
-    - match: Host(`demo-app.k8s-homelab.local`)
+    - match: Host(`demo-app.k8s-homelab.jacobbanghart.com`)
       kind: Rule
       services:
         - name: demo-app

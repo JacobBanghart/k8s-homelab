@@ -87,12 +87,14 @@ spec:
         enabled: true
         ingressClassName: traefik
         hosts:
-          - grafana.k8s-homelab.local
-        # No secretName -- Traefik terminates TLS using its default
-        # TLSStore cert (the internal cert-manager CA's wildcard cert).
+          - grafana.k8s-homelab.jacobbanghart.com
+        # No secretName -- Traefik's Cloudflare DNS-01 cert resolver
+        # issues a real cert on-demand for whatever Host() it sees.
+        # Temporary domain until this app is migrated to its real
+        # final hostname.
         tls:
           - hosts:
-              - grafana.k8s-homelab.local
+              - grafana.k8s-homelab.jacobbanghart.com
       resources:
         requests:
           cpu: "50m"

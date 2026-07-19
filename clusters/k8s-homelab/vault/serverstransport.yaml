@@ -1,0 +1,20 @@
+# Lets Traefik trust Vault's own internal CA (unchanged -- see
+# certificate.yaml) when re-encrypting to the backend, so external
+# clients get a real Cloudflare-issued cert (ingressroute.yaml) while
+# Vault's own listener/Raft/retry_join config is completely untouched.
+#
+# References k8s-homelab-ca-cert, a one-time kubectl-created copy of just
+# the CA's public ca.crt (NOT the full cert-manager-owned
+# k8s-homelab-ca-secret, which also holds that CA's private key --
+# no reason to duplicate that into another namespace). Public cert only,
+# so not really "sensitive" in the way most secrets here are, but kept
+# out of git anyway for consistency.
+apiVersion: traefik.io/v1alpha1
+kind: ServersTransport
+metadata:
+  name: vault-backend
+  namespace: vault
+spec:
+  serverName: vault.vault.svc.cluster.local
+  rootCAsSecrets:
+    - k8s-homelab-ca-cert

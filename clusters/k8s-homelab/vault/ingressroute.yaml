@@ -1,0 +1,25 @@
+# TLS bridging, not passthrough: Traefik terminates a real Cloudflare-
+# issued cert for external clients, then re-encrypts to Vault's backend
+# using serverstransport.yaml (which trusts Vault's own internal CA).
+# Needed because Vault's Raft retry_join dials vault-N.vault-internal
+# hostnames on the same listener/port/cert externally exposed here, and a
+# publicly-issued cert can never include those (not a valid public
+# domain) -- so a single passthrough cert can't satisfy both. Vault's own
+# listener/cert/Raft config (release.yaml, certificate.yaml) is completely
+# unaffected by this -- only how Traefik routes to it changed.
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: vault
+  namespace: vault
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`vault.k8s-homelab.jacobbanghart.com`)
+      kind: Rule
+      services:
+        - name: vault
+          port: 8200
+          scheme: https
+          serversTransport: vault-backend

@@ -1,0 +1,11 @@
+# References basic-auth-secret, created out-of-band via kubectl (same
+# credential flux's dashboard uses) -- not committed, matching every
+# other secret in this project. No secret material here, safe to commit.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: basic-auth
+  namespace: traefik
+spec:
+  basicAuth:
+    secret: basic-auth-secret
