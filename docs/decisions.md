@@ -651,8 +651,18 @@ only needed for `rekey`/`generate-root` -- not routine unseal, since KMS
 handles that -- but that makes them *more* dangerous to store badly, not
 less: they're exactly what you'd reach for during a real disaster, which
 is precisely when a cluster-hosted password manager (Vaultwarden runs on
-the `dev` box) is least likely to be reachable. Currently stashed in a
-local file as a stopgap. Still needs a real home -- offline (printed,
-in a safe) or a password manager genuinely independent of this homelab's
-own infrastructure (hosted Bitwarden/1Password, not self-hosted
-Vaultwarden). Flagged, not yet resolved.
+the `dev` box) is least likely to be reachable.
+
+**Resolved 2026-07-18**, offline/physical storage chosen. The original
+key set was shredded before its printout was confirmed complete (the
+printer ran out of ink mid-job), leaving Vault initialized with no
+usable recovery quorum or root token. Since no secrets had been migrated
+into Vault yet (ESO/consumer wiring still deferred, see above), the raft
+storage on all 3 pods was wiped (`data-vault-{0,1,2}` PVCs deleted) and
+Vault was cleanly reinitialized -- a full teardown/reinit was viable
+specifically because there was no data at stake yet; this would not be
+a safe recovery path once real secrets live in Vault. The new key
+shares + root token were recorded by hand (not written to any file on
+this or any cluster-adjacent machine) and are stored offline per the
+original decision. Lesson: confirm the physical copy is complete and
+legible *before* destroying the digital source, not after.
