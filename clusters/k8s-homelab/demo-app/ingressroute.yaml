@@ -1,0 +1,16 @@
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: demo-app
+  namespace: demo-app
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`demo-app.k8s-homelab.jacobbanghart.com`)
+      kind: Rule
+      services:
+        - name: homepage
+          port: 3000
+  tls:
+    secretName: demo-app-tls

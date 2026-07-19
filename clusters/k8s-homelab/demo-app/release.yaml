@@ -1,0 +1,78 @@
+# Namespace/directory name is legacy (originally the nginx placeholder
+# this replaced) -- kept as-is deliberately to avoid a hostname/DNS
+# change (unifi/pihole_dns.tf still points demo-app.k8s-homelab.jacobbanghart.com
+# here). See docs/decisions.md.
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: homepage
+  namespace: demo-app
+spec:
+  interval: 10m
+  chart:
+    spec:
+      chart: homepage
+      version: "2.1.0"
+      sourceRef:
+        kind: HelmRepository
+        name: jameswynn
+        namespace: demo-app
+  install:
+    remediation:
+      retries: 3
+  upgrade:
+    remediation:
+      retries: 3
+  values:
+    # Cluster-wide pod/node stats via the Kubernetes API -- needs its own
+    # RBAC (read-only, scoped to what the chart's ClusterRole grants),
+    # not touching any other app's own ServiceAccount/RBAC.
+    enableRbac: true
+    serviceAccount:
+      create: true
+
+    resources:
+      requests:
+        cpu: "10m"
+        memory: "64Mi"
+      limits:
+        cpu: "200m"
+        memory: "128Mi"
+
+    config:
+      settings:
+        title: k8s-homelab
+        background:
+          color: "#0f172a"
+        theme: dark
+        headerStyle: clean
+
+      services:
+        - Core Infrastructure:
+            - Vault:
+                href: https://vault.k8s-homelab.jacobbanghart.com
+                description: Secrets management (HA Raft, AWS KMS auto-unseal)
+                icon: vaultwarden.png
+            - Grafana:
+                href: https://grafana.k8s-homelab.jacobbanghart.com
+                description: Metrics, dashboards, alerting
+                icon: grafana.png
+
+      widgets:
+        - kubernetes:
+            cluster:
+              show: true
+              cpu: true
+              memory: true
+              showLabel: true
+              label: "cluster"
+            nodes:
+              show: true
+              cpu: true
+              memory: true
+              showLabel: true
+        - search:
+            provider: duckduckgo
+            target: _blank
+
+      bookmarks: []
