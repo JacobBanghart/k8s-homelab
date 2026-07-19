@@ -7,24 +7,42 @@
 # the shared public IP -- the port-forward cutover routes it here now).
 # Missed carrying this over during the initial Wave 0 migration, which
 # only added the new headlamp.k8s-homelab.jacobbanghart.com name; broke
-# dashboard.jacobbanghart.com until this fix. Kept both hostnames working
-# now. Not excluded from external-dns for this specific record since its
-# DNS content was already correct and unowned -- no need to touch it.
+# dashboard.jacobbanghart.com until this fix. Split into two IngressRoute
+# objects (the exclude annotation is resource-scoped, not per-Host-rule)
+# so external-dns can actively manage dashboard.jacobbanghart.com like
+# any other public app, while headlamp.k8s-homelab... stays Pi-hole-only.
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
 metadata:
-  name: headlamp
+  name: headlamp-internal
   namespace: headlamp
   annotations:
-    # Internal admin tool (headlamp.k8s-homelab...) resolved via Pi-hole
-    # only -- keep external-dns from touching that name. It doesn't
-    # exclude dashboard.jacobbanghart.com, which is a real public record.
     external-dns.alpha.kubernetes.io/exclude: "true"
 spec:
   entryPoints:
     - websecure
   routes:
-    - match: Host(`headlamp.k8s-homelab.jacobbanghart.com`) || Host(`dashboard.jacobbanghart.com`)
+    - match: Host(`headlamp.k8s-homelab.jacobbanghart.com`)
+      kind: Rule
+      middlewares:
+        - name: basic-auth
+          namespace: traefik
+      services:
+        - name: headlamp
+          port: 80
+  tls:
+    secretName: headlamp-tls
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: headlamp-public
+  namespace: headlamp
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`dashboard.jacobbanghart.com`)
       kind: Rule
       middlewares:
         - name: basic-auth
