@@ -99,3 +99,39 @@ resource "unifi_firewall_policy" "allow_k8s_lab_to_truenas_nfs" {
   }
 }
 
+# =============================================================================
+# k8s-lab -> iot subnet (all ports/protocols) -- Home Assistant control
+# =============================================================================
+# home-assistant migrated into k8s-lab (see docs/decisions.md's mDNS entry),
+# but k8s-lab -> Internal defaults to deny for new connections (by design,
+# see the top of this file), same as it did for the NFS case above. Without
+# this, HA can discover devices (mDNS reflection is handled separately, at
+# the gateway) but can't actually poll/control them -- ESPHome's native API
+# (6053) and other IoT integrations use a mix of ports, so this is scoped
+# to the whole iot subnet rather than enumerating each one.
+#
+# `iot` itself has no dedicated firewall zone -- it's never been split out
+# of the default Internal zone, so `iot` already has broad access back into
+# k8s-lab via the existing Internal -> k8s-lab policy above (more open than
+# ideal, but pre-existing and out of scope here; see UnifiTerraform's
+# firewall.tf for the fuller note on iot/friend's vestigial isolation).
+# This policy only opens the other direction, narrowly, to unblock HA.
+resource "unifi_firewall_policy" "allow_k8s_lab_to_iot" {
+  name                 = "Allow k8s-lab to iot"
+  action               = "ALLOW"
+  protocol             = "all"
+  create_allow_respond = true
+  description          = "Home Assistant (k8s-lab) controlling IoT devices. Scoped to the iot subnet only."
+
+  source = {
+    zone_id         = unifi_firewall_zone.k8s_lab.id
+    matching_target = "ANY"
+  }
+
+  destination = {
+    zone_id         = data.unifi_firewall_zone.internal.id
+    matching_target = "IP"
+    ips             = ["10.3.0.0/24"]
+  }
+}
+
