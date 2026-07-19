@@ -912,3 +912,24 @@ live. Worth verifying each secret's value actually matches its
 consumer's real, working credential -- not just copying the Secret
 object's current content into Vault and assuming it's correct -- when
 that workstream picks up.
+
+## Postgres pg_restore migrations: scale the app down first, not after (2026-07-19)
+
+Hit this migrating Immich's Postgres (Wave 3): deployed the fresh
+Postgres + `immich-server`/`immich-machine-learning` all at once, same
+as Nextcloud's migration. Nextcloud's app doesn't auto-migrate an empty
+database on boot, so this was harmless there. Immich's does -- by the
+time `pg_restore` ran, `immich-server` had already connected to the
+empty fresh Postgres and run its own first-install schema migrations,
+so the restore hit ~470 "already exists" errors (tables, constraints,
+extensions all pre-created). Fixed by scaling `immich-server` and
+`immich-machine-learning` to 0, `DROP SCHEMA public CASCADE; CREATE
+SCHEMA public;` to get back to genuinely empty, then restoring cleanly,
+then scaling back up. Verified real data this time (3511 assets, the
+actual user) instead of trusting a quiet exit code.
+
+**General lesson for any future Postgres-backed app migration here**:
+scale the application deployment(s) to 0 *before* the database ever
+comes up for the first time, restore into a database no app has ever
+touched, and only then scale the app back up -- don't assume an app
+won't auto-migrate an empty schema just because the last one didn't.
