@@ -39,6 +39,13 @@ spec:
       enabled: true
       isDefaultClass: true
 
+    # Needed so IngressRoutes outside the traefik namespace (e.g.
+    # headlamp/) can reference the shared basic-auth Middleware defined
+    # here instead of every app duplicating its own copy.
+    providers:
+      kubernetesCRD:
+        allowCrossNamespace: true
+
     ingressRoute:
       dashboard:
         enabled: true
