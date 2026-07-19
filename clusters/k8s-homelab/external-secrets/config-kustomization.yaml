@@ -1,0 +1,24 @@
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: external-secrets-config
+  namespace: flux-system
+spec:
+  # Same chicken-and-egg as cert-manager-config/metallb-config: ESO's CRDs
+  # (ClusterSecretStore, ExternalSecret) don't exist until the
+  # external-secrets HelmRelease itself has been reconciled, so these CR
+  # instances can't live in the same flat apply -- reconciled as their own
+  # Kustomization so a failed attempt only blocks itself and retries
+  # independently.
+  interval: 10m
+  retryInterval: 1m
+  path: ./clusters/k8s-homelab-config/external-secrets
+  prune: true
+  wait: true
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+    namespace: flux-system
+  dependsOn:
+    - name: flux-system
+      namespace: flux-system
