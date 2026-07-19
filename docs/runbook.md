@@ -224,3 +224,52 @@ Not yet exercised end-to-end on this cluster -- treat the first real
 version bump as a drill, not a routine operation, and verify cluster
 health (`kubectl get nodes`, a real workload still schedules/serves
 traffic) after each node before moving to the next.
+
+## Vault
+
+Deployed via `clusters/k8s-homelab/vault/` -- HA, 3-replica Raft storage,
+AWS KMS auto-unseal (key provisioned in `terraform-aws-kms/`), TLS from
+the existing `k8s-homelab-ca-issuer`, exposed at `vault.k8s-homelab.local`
+via Traefik TLS passthrough. No consumers wired up yet -- see
+`docs/decisions.md`.
+
+### One-time init (already done for this cluster's current install)
+
+```bash
+kubectl --context k8s-homelab -n vault exec vault-0 -- sh -c \
+  'VAULT_ADDR=https://127.0.0.1:8200 VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
+   vault operator init -recovery-shares=5 -recovery-threshold=3'
+```
+
+With AWS KMS auto-unseal, this immediately unseals all 3 pods -- no
+`vault operator unseal` step. Save the 5 recovery key shares + initial
+root token somewhere that survives this cluster (and, ideally, this
+whole home network) being down -- they're break-glass credentials for
+`rekey`/`generate-root`, not needed for routine operation, but that also
+means they're exactly the kind of secret you'd reach for during a real
+outage. **Do not store them anywhere that depends on this cluster or
+`dev` being up** (i.e. not in a self-hosted Vaultwarden instance running
+on either) -- see the note in `docs/decisions.md`.
+
+### Restarting a pod / picking up a config change
+
+The Helm chart uses `OnDelete` update strategy deliberately (Vault's own
+guidance -- avoid an uncontrolled automatic rolling restart of a quorum
+store). After any change that touches the StatefulSet template, restart
+pods one at a time, **standbys before the active node**, waiting for each
+to report ready before moving on:
+
+```bash
+kubectl --context k8s-homelab -n vault get pods   # note which is active (HA Mode)
+kubectl --context k8s-homelab -n vault delete pod vault-1   # a standby first
+# wait for 1/1 Ready, then repeat for the other standby, active node last
+```
+
+### Checking status
+
+```bash
+kubectl --context k8s-homelab -n vault exec vault-0 -- sh -c \
+  'VAULT_ADDR=https://127.0.0.1:8200 VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt vault status'
+# Sealed: false, Seal Type: awskms -- confirms auto-unseal is actually
+# active and this hasn't silently fallen back to Shamir.
+```

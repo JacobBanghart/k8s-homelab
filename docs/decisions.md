@@ -588,3 +588,71 @@ Two things worth knowing if this trips someone up again:
   ConfigMap (`kube-prometheus-stack-grafana-datasource`) updates
   immediately on `helm upgrade` regardless -- Grafana just doesn't
   re-read it until the pod actually restarts.
+
+## Vault: this cluster, not the primary "dev" k3s box
+
+The primary cluster is a single node that can't be restarted -- Raft
+needs real quorum, which a single node structurally can't provide. This
+cluster's genuine 3-master HA (already proven via the control-plane VIP)
+is the only place in the homelab that can host it properly. 3-replica
+Raft storage on the `ceph-block` StorageClass, same "real quorum, no
+shortcuts" reasoning as "Control plane: 3 masters, not 2" above.
+
+## Vault: AWS KMS auto-unseal, not Shamir
+
+Shamir (the default) requires a human to run `vault operator unseal`
+against any pod that restarts -- fine for routine restarts, but on a
+3-node Raft cluster, a node going down and *staying* down until someone's
+available to unseal it means degraded redundancy for an unpredictable
+window. AWS KMS auto-unseal removes that step entirely for ~$1/mo, using
+an already-authenticated AWS account (no new provider to onboard).
+Provisioned via a dedicated `terraform-aws-kms/` root (separate state,
+separate credentials from Proxmox/UniFi -- see that root's own reasoning
+in the plan/commit history) with an IAM user scoped to just
+encrypt/decrypt/describe on the one key, not reusing the broader
+`terraform-admin` credentials.
+
+Considered HCP Vault's Transit auto-unseal (letting HashiCorp host the
+unseal mechanism) -- rejected: no genuinely free tier as of mid-2026
+(~$21.60/mo for the Development tier), and it would mean depending on a
+second always-on external service just to unseal the first one.
+
+## Vault: `global.tlsDisable: false` required even with a fully custom TLS listener
+
+The chart's readiness/liveness probes (and the `VAULT_ADDR` env var they
+rely on) default to plain HTTP unless this is set -- true even when
+`server.ha.raft.config` is fully overridden with an HTTPS-only listener
+block. Without it, every pod (including the active one) permanently
+reports `0/1 Ready`: the probe hits `http://127.0.0.1:8200` against a
+listener that only speaks TLS and gets a 400. Not obvious from the chart
+docs since it reads as a TLS-*termination* flag, not "also controls probe
+plumbing regardless of your own listener config."
+
+## Vault: consumer wiring (External Secrets Operator, auth method) deferred
+
+Original plan wired ESO + Vault AppRole auth from the primary `dev`
+cluster immediately, to fix the plaintext `*.secret.yaml` sprawl found in
+`serverk8sdeploywithk3s`. Deferred (2026-07-19): the `dev` box is planned
+to be deprecated entirely, with its whole workload set migrating into
+this cluster instead (not yet planned in detail). Building cross-cluster
+AppRole plumbing for a cluster that's going away would be throwaway work,
+and the plaintext-secrets problem isn't any worse today than before this
+Vault deployment existed, so there's no urgency forcing it now. Once
+workloads actually move here, Vault and its consumers share a cluster,
+and native Kubernetes auth (no manual role-id/secret-id bootstrap, no
+cross-cluster firewall/DNS story) becomes the better fit than AppRole
+anyway -- so this is avoiding building the wrong thing, not just
+procrastinating.
+
+## Vault: break-glass recovery credentials need a home outside this cluster (and outside `dev`)
+
+The 5 recovery key shares + root token from `vault operator init` are
+only needed for `rekey`/`generate-root` -- not routine unseal, since KMS
+handles that -- but that makes them *more* dangerous to store badly, not
+less: they're exactly what you'd reach for during a real disaster, which
+is precisely when a cluster-hosted password manager (Vaultwarden runs on
+the `dev` box) is least likely to be reachable. Currently stashed in a
+local file as a stopgap. Still needs a real home -- offline (printed,
+in a safe) or a password manager genuinely independent of this homelab's
+own infrastructure (hosted Bitwarden/1Password, not self-hosted
+Vaultwarden). Flagged, not yet resolved.
