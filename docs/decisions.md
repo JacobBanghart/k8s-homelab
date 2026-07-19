@@ -628,7 +628,7 @@ listener that only speaks TLS and gets a 400. Not obvious from the chart
 docs since it reads as a TLS-*termination* flag, not "also controls probe
 plumbing regardless of your own listener config."
 
-## Vault: consumer wiring (External Secrets Operator, auth method) deferred
+## Vault: consumer wiring (External Secrets Operator, auth method) deferred, then resolved
 
 Original plan wired ESO + Vault AppRole auth from the primary `dev`
 cluster immediately, to fix the plaintext `*.secret.yaml` sprawl found in
@@ -643,6 +643,21 @@ and native Kubernetes auth (no manual role-id/secret-id bootstrap, no
 cross-cluster firewall/DNS story) becomes the better fit than AppRole
 anyway -- so this is avoiding building the wrong thing, not just
 procrastinating.
+
+**Resolved 2026-07-18**: rather than wait for the full `dev` migration
+(still only planned, not executed -- see the `dev` → `k8s-homelab`
+migration entry), deployed ESO on `k8s-homelab` now, scoped only to
+`k8s-homelab`'s own workloads (`clusters/k8s-homelab/external-secrets/`
++ `clusters/k8s-homelab-config/external-secrets/`, native Kubernetes
+auth as reasoned above). This unblocks migrating the bootstrap secrets
+already hand-created during the Vault/cert rollout (`cloudflare-credentials`,
+`basic-auth-secret`, `grafana-admin-credentials`, `vault-kms-unseal`) and
+sets up the pattern that `serverk8sdeploywithk3s`'s secret rotation will
+reuse once workloads actually land on this cluster. The cross-cluster
+AppRole question for `dev` specifically is still moot, since `dev` is
+still slated for deprecation rather than being wired up as a Vault
+consumer in its own right -- see `docs/runbook.md`'s External Secrets
+Operator section for the setup steps.
 
 ## Vault: break-glass recovery credentials need a home outside this cluster (and outside `dev`)
 

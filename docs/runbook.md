@@ -228,9 +228,13 @@ traffic) after each node before moving to the next.
 ## Vault
 
 Deployed via `clusters/k8s-homelab/vault/` -- HA, 3-replica Raft storage,
-AWS KMS auto-unseal (key provisioned in `terraform-aws-kms/`), TLS from
-the existing `k8s-homelab-ca-issuer`, exposed at `vault.k8s-homelab.local`
-via Traefik TLS passthrough. No consumers wired up yet -- see
+AWS KMS auto-unseal (key provisioned in `terraform-aws-kms/`), internal
+TLS from `k8s-homelab-ca-issuer`. Externally reachable at
+`vault.k8s-homelab.jacobbanghart.com` via Traefik TLS bridging (real
+Let's Encrypt cert on the client-facing leg, re-encrypted to Vault's
+internal cert on the backend leg -- see `vault/serverstransport.yaml`).
+In-cluster consumers (ESO) talk to `vault.vault.svc.cluster.local`
+directly and never touch this external hostname. See
 `docs/decisions.md`.
 
 ### One-time init (already done for this cluster's current install)
@@ -272,4 +276,63 @@ kubectl --context k8s-homelab -n vault exec vault-0 -- sh -c \
   'VAULT_ADDR=https://127.0.0.1:8200 VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt vault status'
 # Sealed: false, Seal Type: awskms -- confirms auto-unseal is actually
 # active and this hasn't silently fallen back to Shamir.
+```
+
+### External Secrets Operator (consumer wiring)
+
+Deployed via `clusters/k8s-homelab/external-secrets/` +
+`clusters/k8s-homelab-config/external-secrets/` (same CRD
+chicken-and-egg split as cert-manager/metallb -- the `ClusterSecretStore`
+can't apply until ESO's CRDs exist). Uses Vault's native Kubernetes auth
+method (`auth/kubernetes/`) against k8s-homelab's own API -- no AppRole
+role-id/secret-id bootstrap needed, since Vault and its consumers share
+a cluster. `vault-server-binding` (created by the Vault Helm chart)
+already grants Vault's own ServiceAccount `system:auth-delegator`, which
+is what lets it call the TokenReview API to validate ESO's SA token.
+
+One-time Vault-side setup (already done for this cluster's current
+install -- re-run only after a full Vault reinit, e.g. following a
+break-glass credential loss):
+
+```bash
+VAULT_TOKEN=<root-token>
+kubectl --context k8s-homelab -n vault exec vault-0 -- sh -c "
+VAULT_SKIP_VERIFY=true VAULT_TOKEN=$VAULT_TOKEN vault secrets enable -path=secret -version=2 kv
+VAULT_SKIP_VERIFY=true VAULT_TOKEN=$VAULT_TOKEN vault auth enable kubernetes
+VAULT_SKIP_VERIFY=true VAULT_TOKEN=$VAULT_TOKEN vault write auth/kubernetes/config \
+  kubernetes_host=https://\$KUBERNETES_SERVICE_HOST:\$KUBERNETES_SERVICE_PORT \
+  token_reviewer_jwt=@/var/run/secrets/kubernetes.io/serviceaccount/token \
+  kubernetes_ca_cert=@/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+"
+```
+
+Policy + role (read-only on the whole `secret/` KV mount -- narrow to
+specific paths per-app once real secrets start landing here):
+
+```bash
+kubectl --context k8s-homelab -n vault exec vault-0 -- sh -c "
+cat <<'POLICY' > /tmp/eso-policy.hcl
+path \"secret/data/*\" { capabilities = [\"read\"] }
+path \"secret/metadata/*\" { capabilities = [\"list\", \"read\"] }
+POLICY
+VAULT_SKIP_VERIFY=true VAULT_TOKEN=$VAULT_TOKEN vault policy write eso-reader /tmp/eso-policy.hcl
+VAULT_SKIP_VERIFY=true VAULT_TOKEN=$VAULT_TOKEN vault write auth/kubernetes/role/external-secrets \
+  bound_service_account_names=external-secrets \
+  bound_service_account_namespaces=external-secrets \
+  policies=eso-reader \
+  ttl=1h
+"
+```
+
+The `ClusterSecretStore` (`vault-backend`) trusts Vault's internal CA via
+a `k8s-homelab-ca-cert` secret copied into the `external-secrets`
+namespace (public cert only, same extraction pattern as
+`vault/serverstransport.yaml` -- never copy the CA secret that holds the
+private key).
+
+Checking it's working:
+
+```bash
+kubectl --context k8s-homelab -n external-secrets get clustersecretstore vault-backend
+# STATUS should show Valid; check `kubectl describe` if not.
 ```

@@ -14,14 +14,16 @@ spec:
         name: external-secrets
         namespace: external-secrets
   install:
-    crds:
-      enabled: true
     remediation:
       retries: 3
   upgrade:
     remediation:
       retries: 3
   values:
+    # installCRDs defaults to true in this chart already; set explicitly
+    # since HelmRelease.spec.install.crds (a Flux-level string enum, not
+    # this) is the wrong knob and was mistakenly used here at first.
+    installCRDs: true
     resources:
       requests:
         cpu: "10m"
