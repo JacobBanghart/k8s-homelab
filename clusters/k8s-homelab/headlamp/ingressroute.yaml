@@ -1,9 +1,7 @@
-# Cluster-admin-scoped UI (see rbac.yaml) -- basic-auth middleware added
-# as a second layer in front of Headlamp's own token login on the internal
-# route (dev's copy of this app had no such layer; not carried forward
-# there). The public route (dashboard.jacobbanghart.com) skips basic-auth
-# since it's internet-facing behind Headlamp's own token login only --
-# a second static-credential layer isn't needed there.
+# Cluster-admin-scoped UI (see rbac.yaml). No basic-auth on either route --
+# Headlamp's own token login is the only gate on both, per explicit
+# decision (the static basic-auth credential was more friction than
+# protection here).
 #
 # dashboard.jacobbanghart.com is dev's original public hostname for this
 # app (real Cloudflare A record already existed, unchanged, pointing at
@@ -27,9 +25,6 @@ spec:
   routes:
     - match: Host(`headlamp.k8s-homelab.jacobbanghart.com`)
       kind: Rule
-      middlewares:
-        - name: basic-auth
-          namespace: traefik
       services:
         - name: headlamp
           port: 80
