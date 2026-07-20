@@ -967,3 +967,130 @@ VM (freeing its 96 vCPU/64GB back to the Proxmox host) is deliberately
 a separate, later step requiring its own explicit go-ahead -- not
 bundled into this migration -- once everything's been confirmed stable
 for a while.
+
+## Authentik: first OAuth/OIDC client, first app is Vault (2026-07-19)
+
+Deployed Authentik (`flux` repo, not this one --
+`flux/clusters/k8s-homelab-apps/authentik/authentik.yaml`) as the
+homelab's OAuth/OIDC provider, with Vault as the first app wired up to
+it via Vault's built-in `oidc` auth method (setup steps in
+`docs/runbook.md`). Two bugs hit along the way, both resolved same-day:
+
+**Stale client_id/secret from Authentik's application wizard.** The
+5-step "New Application" wizard regenerates the OAuth2 provider's
+`client_id`/`client_secret` on every re-render of the config step --
+confirmed by capturing three different values across three loads of
+the same in-progress form. Copying either value mid-wizard (rather than
+after saving) silently produces credentials Vault will reject with
+"Client ID Error: the client identifier is missing or invalid," which
+reads like a config typo rather than a stale-value problem. Fix:
+always save the application first, then re-open the saved provider's
+edit page and copy from there -- that value is stable.
+
+Also hit, but not load-bearing: the wizard's first submission attempt
+(redirect URIs filled in during the wizard itself) failed silently --
+no error shown, nothing created. Retrying with redirect URIs left blank
+during creation, added afterward by editing the saved provider, worked.
+Not fully root-caused; worth retrying "leave optional fields blank
+during the wizard, fill in after" if this recurs on the next app.
+
+**Vault only requests the bare `openid` scope by default.** Authentik's
+provider already had the `email` scope mapping attached (visible under
+the provider's Advanced protocol settings), but logins still failed
+with `Authentication failed: claim "email" not found in token` --
+because Vault's OIDC role never asked for that scope in the first
+place, so Authentik had nothing to attach it to in the returned token.
+Fix: `oidc_scopes="email,profile"` on `auth/oidc/role/default`. Not
+something the "scope mapping is attached in Authentik" state tells you
+is missing -- the mapping being present and the mapping being
+*requested* are independently necessary.
+
+Both fixes are already applied and confirmed working end-to-end
+(browser login and CLI `vault login -method=oidc`). Current OIDC role
+grants only the built-in `default` policy -- deliberately minimal, not
+yet extended to a per-identity admin path (see `docs/runbook.md`'s
+OIDC section for how that would be added if/when needed).
+
+**Later (2026-07-19/20)**, added a per-identity `admin` OIDC role
+(`bound_claims` on email, `admin` ACL policy) so day-to-day login can
+stay on the minimal `default` role while still allowing an explicit
+`vault login -method=oidc role=admin` step-up. Hit one more gotcha
+setting it up: passing `bound_claims='{"email":"..."}'` as an inline
+CLI flag got silently mangled by zsh's bracket-auto-escaping mid-paste,
+producing `400: error converting input for field "bound_claims": ''
+expected a map, got 'string'` with no hint that the *value* itself was
+corrupted (looked like a missing-flag error). Fixed by writing the
+whole role as a JSON file and passing it with `vault write
+auth/oidc/role/admin @file.json` instead -- sidesteps shell quoting
+for map-type fields entirely. See `docs/runbook.md`'s OIDC section for
+the working command.
+
+## Grafana: second Authentik OIDC client, three stacked bugs (2026-07-19)
+
+Wired Grafana up to Authentik the same way as Vault (own OAuth2
+Provider + Application, `auth.generic_oauth` in `grafana.ini`). Took
+three independent bugs to get working, each masking the next:
+
+**1. Single-replica + RWO PVC + chart-default RollingUpdate is a
+guaranteed deadlock on any change.** Grafana's Deployment uses
+`ceph-block` (RWO, not RWX -- see below for why RWO's the right choice
+here) with the chart's default `RollingUpdate` strategy. On any spec
+change, the new pod can never mount the volume while the old pod still
+holds it (`FailedAttachVolume: Multi-Attach error`), and the old pod
+never terminates because it's still "the ready one" -- textbook
+stuck-forever deadlock, not specific to the OIDC change that first hit
+it. Fix: `grafana.deploymentStrategy: {type: Recreate}` -- **not**
+`grafana.strategy`, which is a real key elsewhere in this chart's
+values tree (unrelated purpose) and silently no-ops if used here by
+mistake, exactly what happened on the first attempt. Once live, a
+stuck rollout can be recovered immediately without waiting out Helm's
+5m timeout: `kubectl patch deployment ... --type merge -p
+'{"spec":{"strategy":{"type":"Recreate","rollingUpdate":null}}}'` (the
+`rollingUpdate: null` is required -- Recreate and a populated
+`rollingUpdate` block are mutually exclusive at the API level, and
+once any actor other than Helm's field manager has touched
+`.spec.strategy` -- a manual patch, `kubectl rollout restart` -- every
+subsequent `helm upgrade` conflicts on that field until it's cleared
+the same way again).
+
+RWO vs RWX aside: `ceph-block` (RWO/RBD) is the right call for
+Grafana, not a mistake to fix by switching to `ceph-filesystem`
+(RWX/CephFS). RWX buys nothing here -- Grafana's a single replica with
+one writer, and CephFS's multi-writer coordination (MDS round-trips)
+is pure overhead an app that can't use it. RWX is reserved for
+apps/data that actually need concurrent multi-pod writes.
+
+**2. Grafana doesn't know its own external URL.** Without
+`server.root_url` set, Grafana generates OAuth `redirect_uri`s from
+its own listener address (`http://<pod-host>:3000/...`), not the real
+public HTTPS hostname Traefik terminates TLS for -- Authentik then
+rejects the mismatch as a "Redirect URI Error." Fix:
+`grafana.ini: server: root_url: https://grafana.k8s-homelab.jacobbanghart.com/`.
+
+**3. Transcribing a 128-char client_secret from a zoomed screenshot
+introduces character-level errors that are invisible to casual
+review.** Authentik's client_secret field is masked in the UI; reading
+it back out (via the reveal-eye + zoomed screenshot, since Authentik's
+web UI has no copy button and browser JS execution is blocked from
+reading high-entropy/secret-looking string values entirely -- a
+sensible safety guard, not a bug) misread two characters (`0`/`O` and
+`L`/`l` -- exactly the classic OCR/eyeball confusions). Result:
+`oauth2: "invalid_client" "Client authentication failed"` at Grafana's
+token-exchange step, which reads like a config/secret-value problem in
+general, not specifically "one character is wrong two-thirds of the
+way through a 128-char string." Length matched (128 both sides), so a
+naive spot-check wouldn't have caught it. Found and fixed by comparing
+the *live* field value against the transcribed guess entirely inside
+one `javascript_tool` call -- binary-search prefix equality
+(`actual.slice(0,i) === guess.slice(0,i)` for increasing `i`) to find
+each differing index, then a small fixed alphabet loop
+(`actual[i] === c`) to identify just that one character -- without
+ever having the full secret returned as a single high-entropy string
+(which the browser tooling blocks). Real OS clipboard copy/paste
+(`ctrl+c` in the browser, reading the system clipboard from a
+terminal) was tried first and didn't work -- the browser extension's
+clipboard write didn't reach the OS clipboard my shell could read, got
+a stale unrelated value instead. Worth trying again first next time,
+but the JS-diff technique is the reliable fallback for any
+multi-character secret that needs verifying without a working
+clipboard bridge.

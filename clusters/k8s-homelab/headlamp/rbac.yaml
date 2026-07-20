@@ -1,5 +1,8 @@
 # ServiceAccount with cluster-admin for full cluster visibility in the
-# Headlamp UI.
+# Headlamp UI. Kept as a fallback/manual-token path (works through the
+# internal headlamp.k8s-homelab... hostname) alongside the OIDC binding
+# below -- the two are independent auth methods to the same cluster, not
+# a migration from one to the other.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -29,3 +32,23 @@ metadata:
   annotations:
     kubernetes.io/service-account.name: headlamp-admin
 type: kubernetes.io/service-account-token
+---
+# Binds the specific OIDC identity (not "anyone who authenticates via
+# Authentik") to cluster-admin -- kube-apiserver's --oidc-username-claim
+# is email and --oidc-username-prefix is "oidc:" (see
+# ansible/roles/control_plane_oidc), so the resulting Kubernetes
+# username is exactly "oidc:<email>". Real per-identity audit trail via
+# the public dashboard.jacobbanghart.com hostname, unlike the shared SA
+# token above.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: headlamp-oidc-admin
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+  - kind: User
+    name: "oidc:jacobmbanghart@gmail.com"
+    apiGroup: rbac.authorization.k8s.io

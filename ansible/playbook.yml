@@ -65,6 +65,17 @@
   roles:
     - control_plane_metrics
 
+- name: Trust Authentik as an OIDC issuer on kube-apiserver
+  hosts: masters
+  become: true
+  # One master at a time -- a bad --oidc-issuer-url crash-loops that
+  # master's apiserver, and the role's own wait-for-Ready check catches
+  # that before moving on to the next one.
+  serial: 1
+  tags: [control-plane-oidc]
+  roles:
+    - control_plane_oidc
+
 - name: Security-only automatic OS patching across the whole cluster
   hosts: k8s_cluster
   become: true

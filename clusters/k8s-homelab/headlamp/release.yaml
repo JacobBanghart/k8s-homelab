@@ -26,6 +26,26 @@ spec:
     # plain Ingress support.
     ingress:
       enabled: false
+    # OIDC via Authentik. This only changes how the Headlamp *frontend*
+    # authenticates you -- Headlamp forwards whatever token it gets
+    # straight to the Kubernetes API server, so this alone does nothing
+    # without kube-apiserver also trusting Authentik as an OIDC issuer
+    # (--oidc-issuer-url etc, see ansible/roles/control_plane_oidc) and
+    # RBAC binding the resulting identity to a role. See docs/decisions.md.
+    #
+    # callbackURL is fixed to dashboard.jacobbanghart.com (the public
+    # hostname) since the chart bakes in one redirect URI -- OIDC login
+    # only works through that hostname; headlamp.k8s-homelab... keeps
+    # working via manual token entry (existing headlamp-admin SA token).
+    config:
+      oidc:
+        secret:
+          create: false
+        externalSecret:
+          enabled: true
+          name: headlamp-oidc
+          hasScopes: true
+        callbackURL: https://dashboard.jacobbanghart.com/oidc-callback
     resources:
       requests:
         memory: "128Mi"

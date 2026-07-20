@@ -1,0 +1,59 @@
+---
+# Trusts Authentik as an OIDC issuer for kube-apiserver, so Headlamp
+# (and anything else that forwards an id_token as Bearer auth) can
+# authenticate real per-identity users instead of everyone sharing the
+# same cluster-admin ServiceAccount token. Additive -- existing
+# client-cert/ServiceAccount-token auth keeps working unchanged.
+#
+# --oidc-username-prefix=oidc: avoids collision between OIDC identities
+# and any existing client-cert/ServiceAccount username, and makes it
+# obvious in audit logs/RBAC bindings which auth path a request came
+# through.
+
+- name: Add OIDC flags to kube-apiserver manifest
+  ansible.builtin.lineinfile:
+    path: /etc/kubernetes/manifests/kube-apiserver.yaml
+    insertafter: '^    - --kubelet-preferred-address-types='
+    line: "{{ item }}"
+  # oidc-username-prefix's value ends in a bare ":" -- unquoted, YAML
+  # reads the trailing colon as a mapping indicator and folds the whole
+  # `command` list into a single scalar string, which kubelet then
+  # rejects ("cannot unmarshal object into Go struct field
+  # Container.spec.containers.command of type string"). Hit this for
+  # real on k8s-master-0: kubelet dropped the static pod entirely
+  # (no container, not even crash-looping) until the line was quoted.
+  # Quote every inserted value defensively, not just this one.
+  loop:
+    - '    - "--oidc-issuer-url=https://auth.jacobbanghart.com/application/o/headlamp/"'
+    - '    - "--oidc-client-id=BPpp9hCaFCjhfY9C8xOU5AvVYWcRCkjXVU3VeZlH"'
+    - '    - "--oidc-username-claim=email"'
+    - '    - "--oidc-username-prefix=oidc:"'
+  register: apiserver_patched
+
+# Static pod manifest edits are picked up by kubelet's own fsnotify
+# watch + periodic resync, but force it explicitly and deterministically
+# rather than waiting/hoping -- same pattern as control_plane_metrics.
+- name: Force kube-apiserver restart if patched
+  ansible.builtin.command:
+    cmd: "kubectl delete pod kube-apiserver-{{ inventory_hostname }} -n kube-system --kubeconfig /etc/kubernetes/admin.conf"
+  when: apiserver_patched.changed
+  changed_when: true
+  failed_when: false
+
+# Wait for this master's apiserver to be back and Ready before `serial: 1`
+# lets the play move on to the next master -- a bad --oidc-issuer-url
+# (typo, unreachable, cert issue) makes kube-apiserver fail its own
+# health checks and crash-loop, so catch that here rather than plowing
+# ahead into the next master with a known-bad config.
+- name: Wait for kube-apiserver to be Ready again on this master
+  ansible.builtin.command:
+    cmd: >-
+      kubectl get pod kube-apiserver-{{ inventory_hostname }} -n kube-system
+      --kubeconfig /etc/kubernetes/admin.conf
+      -o jsonpath={.status.containerStatuses[0].ready}
+  register: apiserver_ready_check
+  until: apiserver_ready_check.stdout == "true"
+  retries: 30
+  delay: 5
+  when: apiserver_patched.changed
+  changed_when: false
