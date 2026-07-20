@@ -26,6 +26,22 @@
     enabled: true
     state: started
 
+# Default 128 max_user_instances is easy to exhaust once several pods'
+# processes on a node each hold their own file watchers (e.g. Jellyfin's
+# ASP.NET config-reload FileSystemWatcher) -- hit this for real as a
+# jellyfin CrashLoopBackOff after a routine node reboot surfaced how low
+# the untouched default was (2026-07-20).
+- name: Raise inotify limits so node reboots don't crash-loop file-watching pods
+  ansible.posix.sysctl:
+    name: "{{ item.name }}"
+    value: "{{ item.value }}"
+    sysctl_set: true
+    state: present
+    reload: true
+  loop:
+    - { name: fs.inotify.max_user_instances, value: "1024" }
+    - { name: fs.inotify.max_user_watches, value: "1048576" }
+
 - name: Confirm swap is off (should already be disabled by the Packer image)
   ansible.builtin.command: swapon --summary
   register: swap_check
