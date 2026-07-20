@@ -25,7 +25,7 @@
   # Quote every inserted value defensively, not just this one.
   loop:
     - '    - "--oidc-issuer-url=https://auth.jacobbanghart.com/application/o/headlamp/"'
-    - '    - "--oidc-client-id=BPpp9hCaFCjhfY9C8xOU5AvVYWcRCkjXVU3VeZlH"'
+    - '    - "--oidc-client-id=BPpp9hCaFCjhfY9C8xOU5AvVYWcRCkjXVU3VeZIH"'
     - '    - "--oidc-username-claim=email"'
     - '    - "--oidc-username-prefix=oidc:"'
   register: apiserver_patched
