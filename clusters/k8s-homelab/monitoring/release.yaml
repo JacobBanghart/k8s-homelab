@@ -123,6 +123,11 @@ spec:
           api_url: https://auth.jacobbanghart.com/application/o/userinfo/
           redirect_uri: https://grafana.k8s-homelab.jacobbanghart.com/login/generic_oauth
           allow_sign_up: true
+          # No role_attribute_path meant every Authentik login (including
+          # jacob's own account) got Grafana's default org role, Viewer --
+          # which can't use Explore. Pin jacob's account to Admin by email;
+          # everyone else stays Viewer.
+          role_attribute_path: "email=='jacobmbanghart@gmail.com' && 'Admin' || 'Viewer'"
       persistence:
         enabled: true
         storageClassName: ceph-block
