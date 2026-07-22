@@ -111,6 +111,19 @@ spec:
         - maxSkew: 1
           topologyKey: kubernetes.io/hostname
           whenUnsatisfiable: DoNotSchedule
+          # Without this, skew is computed across all 6 nodes, not just
+          # the 3 workers grafana can actually schedule to -- the 3
+          # tainted masters count as valid zero-pod domains by default,
+          # so a rollout's 4th (surge) pod on any worker reads as skew
+          # 2-vs-0 against a master, not 2-vs-1 against the other
+          # workers, and gets rejected even though maxSkew: 1 should
+          # allow it. Discovered when the first rollout after adding
+          # this constraint stuck at 3/4 Ready, one pod permanently
+          # Pending with "3 node(s) had untolerated taint" -- masters
+          # being counted as domains, not the taint itself, was the
+          # actual cause (the taint just controls whether *this* pod can
+          # land on that node, not whether it counts in skew maths).
+          nodeTaintsPolicy: Honor
           labelSelector:
             matchLabels:
               app.kubernetes.io/name: grafana
