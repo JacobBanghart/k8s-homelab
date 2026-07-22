@@ -78,22 +78,25 @@ spec:
         existingSecret: grafana-admin-credentials
         userKey: admin-user
         passwordKey: admin-password
-      # One replica per worker node (3 replicas, hard anti-affinity) for
-      # node-drain resilience -- see docs/decisions.md, 2026-07-21 entry.
-      # This only works because state now lives in grafana-postgres
-      # (CNPG, see clusters/k8s-homelab-config/cnpg/) instead of the
-      # local RWO ceph-block PVC below -- with local RWO storage,
-      # multiple replicas would hit the exact same Multi-Attach deadlock
-      # the original single-replica Recreate workaround was protecting
+      # At least 1 replica per worker node for node-drain resilience --
+      # see docs/decisions.md, 2026-07-21 entry. This only works because
+      # state now lives in grafana-postgres (CNPG, see
+      # clusters/k8s-homelab-config/cnpg/) instead of the local RWO
+      # ceph-block PVC below -- with local RWO storage, multiple
+      # replicas would hit the exact same Multi-Attach deadlock the
+      # original single-replica Recreate workaround was protecting
       # against, just permanently instead of only during rollouts.
       #
-      # maxSurge must be 0, not the chart default of 1: with a *required*
-      # (hard) anti-affinity rule and exactly 3 nodes for exactly 3
-      # replicas, there's no 4th node for a surge pod to land on --
-      # maxSurge: 1 here deadlocks the rollout on any spec change the
-      # same way the old RWO PVC used to. maxUnavailable: 1 instead lets
-      # the rollout free a node by evicting one old pod at a time, 2
-      # replicas staying up throughout.
+      # topologySpreadConstraints, not a required podAntiAffinity rule
+      # (same pattern traefik/release.yaml already uses) -- anti-affinity
+      # would cap this at *exactly* one pod per node, so replicas beyond
+      # the node count would be permanently unschedulable if this is ever
+      # scaled up. Spread balances evenly instead (3 replicas/3 nodes
+      # still lands one-per-node today) without that ceiling, and with
+      # maxSkew: 1 a rollout's temporary 4th (surge) pod still fits --
+      # 2/1/1 has skew 1 -- so maxSurge can stay at the chart default
+      # instead of needing the evict-first maxUnavailable workaround a
+      # hard anti-affinity rule would require.
       #
       # Key is deploymentStrategy, not strategy -- the latter is a
       # different (unrelated) top-level key elsewhere in this chart's
@@ -102,16 +105,16 @@ spec:
       deploymentStrategy:
         type: RollingUpdate
         rollingUpdate:
-          maxSurge: 0
-          maxUnavailable: 1
-      affinity:
-        podAntiAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            - labelSelector:
-                matchLabels:
-                  app.kubernetes.io/name: grafana
-                  app.kubernetes.io/instance: kube-prometheus-stack
-              topologyKey: kubernetes.io/hostname
+          maxSurge: 1
+          maxUnavailable: 0
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: grafana
+              app.kubernetes.io/instance: kube-prometheus-stack
       # OIDC via Authentik. client_id isn't secret (it's visible in any
       # browser OAuth redirect anyway) so it's inline here; client_secret
       # comes from Vault (monitoring/grafana-oidc, see
