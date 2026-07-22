@@ -78,19 +78,22 @@ spec:
         existingSecret: grafana-admin-credentials
         userKey: admin-user
         passwordKey: admin-password
-      # Chart default is RollingUpdate, which deadlocks here: single
-      # replica + a RWO ceph-block PVC means the new pod can never mount
-      # the volume while the old pod still holds it, and the old pod
-      # won't terminate until the new one reports Ready -- a genuine
-      # stuck-forever deadlock on any spec change, not just this one.
-      # Discovered when the OIDC config change below got stuck at
-      # Init:0/1 for the full 5m Helm timeout. See docs/decisions.md.
-      #
-      # Key is deploymentStrategy, not strategy -- the latter is a
-      # different (unrelated) top-level key elsewhere in this chart's
-      # values tree and silently no-ops if used here instead.
+      # 2 replicas for node-drain resilience (see docs/decisions.md,
+      # 2026-07-21 entry). This only works because state now lives in
+      # grafana-postgres (CNPG, see clusters/k8s-homelab-config/cnpg/)
+      # instead of the local RWO ceph-block PVC below -- with local RWO
+      # storage, 2 replicas would hit the exact same Multi-Attach
+      # deadlock the original single-replica Recreate workaround was
+      # protecting against, just permanently instead of only during
+      # rollouts. Key is deploymentStrategy, not strategy -- the latter
+      # is a different (unrelated) top-level key elsewhere in this
+      # chart's values tree and silently no-ops if used here instead.
+      replicas: 2
       deploymentStrategy:
-        type: Recreate
+        type: RollingUpdate
+        rollingUpdate:
+          maxSurge: 1
+          maxUnavailable: 0
       # OIDC via Authentik. client_id isn't secret (it's visible in any
       # browser OAuth redirect anyway) so it's inline here; client_secret
       # comes from Vault (monitoring/grafana-oidc, see
@@ -98,11 +101,24 @@ spec:
       # $__env{} interpolation -- never committed. See docs/decisions.md
       # for the Authentik Provider/Application setup (web UI only, not
       # declarative -- same as Vault's OIDC app).
+      env:
+        GF_DATABASE_TYPE: postgres
+        GF_DATABASE_HOST: grafana-postgres-rw.monitoring.svc.cluster.local:5432
+        GF_DATABASE_NAME: grafana
+        GF_DATABASE_SSL_MODE: disable
       envValueFrom:
         GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET:
           secretKeyRef:
             name: grafana-oidc
             key: CLIENT_SECRET
+        GF_DATABASE_USER:
+          secretKeyRef:
+            name: grafana-postgres-app
+            key: username
+        GF_DATABASE_PASSWORD:
+          secretKeyRef:
+            name: grafana-postgres-app
+            key: password
       grafana.ini:
         server:
           # Without this, Grafana doesn't know it's behind Traefik's TLS
@@ -128,11 +144,14 @@ spec:
           # which can't use Explore. Pin jacob's account to Admin by email;
           # everyone else stays Viewer.
           role_attribute_path: "email=='jacobmbanghart@gmail.com' && 'Admin' || 'Viewer'"
+      # Disabled, not moved to RWX: with 2 replicas, a shared RWO PVC
+      # would hit the same Multi-Attach deadlock persistence was already
+      # removed to avoid (see deploymentStrategy comment above), and
+      # nothing here needs to survive a pod restart anymore -- dashboards
+      # come from ConfigMaps via the sidecar, everything else lives in
+      # grafana-postgres now.
       persistence:
-        enabled: true
-        storageClassName: ceph-block
-        accessModes: ["ReadWriteOnce"]
-        size: 5Gi
+        enabled: false
       ingress:
         enabled: true
         ingressClassName: traefik
