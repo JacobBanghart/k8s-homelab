@@ -1094,3 +1094,53 @@ a stale unrelated value instead. Worth trying again first next time,
 but the JS-diff technique is the reliable fallback for any
 multi-character secret that needs verifying without a working
 clipboard bridge.
+
+## Grafana HA: CNPG-backed external Postgres, 2 replicas (2026-07-21)
+
+Node drains were causing real (if brief) Grafana downtime: single
+replica + RWO ceph-block PVC + `Recreate` strategy (see the OIDC entry
+above) means every drain fully kills the pod, waits for the RBD volume
+to detach from the old node and reattach on wherever the new pod
+lands, then starts up -- fully serialized, no overlap possible by
+construction. That was a deliberate, correct tradeoff for a
+single-replica app on RWO storage, not a bug -- but it meant Grafana
+had no actual HA story.
+
+Fix was to stop trying to make single-replica-on-RWO drain cleanly
+(structurally impossible) and instead remove the reason Grafana needed
+local storage at all: moved its state to Postgres
+(`clusters/k8s-homelab-config/cnpg/cluster.yaml`, a 3-instance
+CloudNativePG cluster, one replica pinned per worker node via
+`podAntiAffinityType: required` so it survives a single node
+drain/loss the same way Ceph's mon/osd/mds quorums already do) and
+went to `replicas: 2` with the chart's default `RollingUpdate`
+strategy. `persistence.enabled: false` now -- not moved to
+`ceph-filesystem`/RWX, since 2 replicas sharing one RWO PVC would hit
+the exact same Multi-Attach deadlock permanently instead of just
+during rollouts, and nothing on local disk needs to survive a restart
+once dashboards (ConfigMap sidecar) and everything else (Postgres)
+don't depend on it.
+
+CNPG was chosen over hand-rolling HA Postgres because it already does
+the hard part (Patroni-style automatic primary failover, ~10-30s) and
+this is the first Postgres in the cluster that actually needs it --
+every other app's Postgres (authentik, nextcloud, immich) is still a
+plain single-pod instance with the same drain-downtime problem this
+fix solves for Grafana. Deliberately scoped to just Grafana as a pilot
+rather than migrating those too in the same change.
+
+Left as a known gap, not solved here: Grafana's unified alerting
+doesn't have HA peer config (`ha_listen_address` etc.) set up, so with
+2 replicas both instances may fire duplicate notifications for the
+same alert rather than coordinating via gossip. Not an issue yet since
+no alert rules/contact points are configured, but needs addressing
+before either is added.
+
+Also unverified as of this write-up: the exact key names CNPG
+auto-generates on the `grafana-postgres-app` secret. Went with the
+documented `kubernetes.io/basic-auth` convention (`username`/
+`password`) since that's what the secret type requires when CNPG
+generates it, but this hasn't been confirmed against a live cluster
+yet -- check `kubectl -n monitoring get secret grafana-postgres-app -o
+jsonpath='{.data}'` after the Cluster reconciles, before assuming the
+Grafana rollout will actually come up healthy.

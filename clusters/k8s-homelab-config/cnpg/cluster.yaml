@@ -1,0 +1,37 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: grafana-postgres
+  namespace: monitoring
+spec:
+  instances: 3
+  # One instance per worker node, hard requirement -- mirrors the same
+  # host-failure-domain spread Ceph already uses (osd/mon/mds all
+  # failureDomain: host across the 3 workers). Without this, CNPG's
+  # default anti-affinity is only "preferred", so a bad scheduling
+  # decision could put 2+ replicas on the same node and defeat the
+  # point of HA on a node drain/loss.
+  affinity:
+    enablePodAntiAffinity: true
+    topologyKey: kubernetes.io/hostname
+    podAntiAffinityType: required
+
+  storage:
+    storageClass: ceph-block
+    size: 2Gi
+
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+
+  bootstrap:
+    initdb:
+      database: grafana
+      owner: grafana
+      # No secret specified -- CNPG auto-generates grafana-postgres-app
+      # (kubernetes.io/basic-auth, keys: username/password) rather than
+      # a credential committed to git.
