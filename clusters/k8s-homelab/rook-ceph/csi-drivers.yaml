@@ -35,14 +35,52 @@ spec:
           priorityClassName: system-node-critical
         controllerPlugin:
           priorityClassName: system-cluster-critical
+          # 2 replicas (not 3, unlike CNPG/Grafana) -- these are
+          # active/passive with leader election, not a quorum, so 2 is
+          # enough to survive a single node drain: whichever isn't
+          # hosting the drained node keeps serving volume
+          # attach/detach/provision requests for every *other* PVC in
+          # the cluster while the other reschedules. At replicas: 1
+          # (the chart default), a drain of whichever node happened to
+          # host this pod stalled every other app's volume reattach
+          # for the duration -- the exact problem the rest of tonight's
+          # work was trying to fix, just one layer further down.
+          #
+          # No shared anti-affinity default here -- the rendered pods'
+          # only label is `app: <driver-name>-ctrlplugin`, which is
+          # different per driver (no common selector value both the rbd
+          # and cephfs deployments could share), so anti-affinity is set
+          # per-driver below instead, each self-targeting its own app
+          # label.
+          replicas: 2
 
     drivers:
       rbd:
         enabled: true
         name: rook-ceph.rbd.csi.ceph.com
+        controllerPlugin:
+          affinity:
+            podAntiAffinity:
+              preferredDuringSchedulingIgnoredDuringExecution:
+                - weight: 100
+                  podAffinityTerm:
+                    labelSelector:
+                      matchLabels:
+                        app: rook-ceph.rbd.csi.ceph.com-ctrlplugin
+                    topologyKey: kubernetes.io/hostname
       cephfs:
         enabled: true
         name: rook-ceph.cephfs.csi.ceph.com
+        controllerPlugin:
+          affinity:
+            podAntiAffinity:
+              preferredDuringSchedulingIgnoredDuringExecution:
+                - weight: 100
+                  podAffinityTerm:
+                    labelSelector:
+                      matchLabels:
+                        app: rook-ceph.cephfs.csi.ceph.com-ctrlplugin
+                    topologyKey: kubernetes.io/hostname
       nfs:
         enabled: false
         name: rook-ceph.nfs.csi.ceph.com
