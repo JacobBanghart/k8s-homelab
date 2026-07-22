@@ -35,6 +35,22 @@ spec:
           priorityClassName: system-node-critical
         controllerPlugin:
           priorityClassName: system-cluster-critical
+
+    # controllerPlugin.replicas/affinity are set per-driver below, NOT
+    # under operatorConfig.driverSpecDefaults above -- despite the name,
+    # driverSpecDefaults only feeds the separate OperatorConfig CRD
+    # (templates/operatorConfig.yaml), which individual Driver CRs never
+    # reference. Each Driver CR (templates/driver.yaml) is templated
+    # solely from .Values.drivers.<name>.*, and the chart's own
+    # values.yaml already hardcodes replicas: 1 at that path per driver
+    # -- so a value set only under driverSpecDefaults is silently
+    # ineffective. Confirmed by rendering both ways with `helm template`
+    # against this chart version before settling on this structure.
+    drivers:
+      rbd:
+        enabled: true
+        name: rook-ceph.rbd.csi.ceph.com
+        controllerPlugin:
           # 2 replicas (not 3, unlike CNPG/Grafana) -- these are
           # active/passive with leader election, not a quorum, so 2 is
           # enough to survive a single node drain: whichever isn't
@@ -42,23 +58,10 @@ spec:
           # attach/detach/provision requests for every *other* PVC in
           # the cluster while the other reschedules. At replicas: 1
           # (the chart default), a drain of whichever node happened to
-          # host this pod stalled every other app's volume reattach
-          # for the duration -- the exact problem the rest of tonight's
-          # work was trying to fix, just one layer further down.
-          #
-          # No shared anti-affinity default here -- the rendered pods'
-          # only label is `app: <driver-name>-ctrlplugin`, which is
-          # different per driver (no common selector value both the rbd
-          # and cephfs deployments could share), so anti-affinity is set
-          # per-driver below instead, each self-targeting its own app
-          # label.
+          # host this pod stalled every other app's volume reattach for
+          # the duration -- the exact problem the rest of tonight's work
+          # was trying to fix, just one layer further down.
           replicas: 2
-
-    drivers:
-      rbd:
-        enabled: true
-        name: rook-ceph.rbd.csi.ceph.com
-        controllerPlugin:
           affinity:
             podAntiAffinity:
               preferredDuringSchedulingIgnoredDuringExecution:
@@ -72,6 +75,7 @@ spec:
         enabled: true
         name: rook-ceph.cephfs.csi.ceph.com
         controllerPlugin:
+          replicas: 2
           affinity:
             podAntiAffinity:
               preferredDuringSchedulingIgnoredDuringExecution:
