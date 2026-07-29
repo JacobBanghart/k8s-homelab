@@ -1,3 +1,6 @@
+# PERSONALIZE: the hostname below (grafana.k8s-homelab.jacobbanghart.com)
+# is this deployment's own domain -- replace with your own before applying
+# to your fork.
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:

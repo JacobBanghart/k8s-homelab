@@ -34,6 +34,11 @@ terraform/   VM provisioning (clones of the Packer template)
 ansible/     OS config + kubeadm cluster bootstrap
 unifi/       UniFi VLAN + firewall isolation for the cluster's network
 clusters/    Flux GitOps config for this cluster (kubectl context k8s-homelab)
+             - clusters/k8s-homelab/         core bootstrap + addon HelmReleases
+             - clusters/k8s-homelab-config/  per-addon config applied after its
+               HelmRelease exists (cert-manager issuers, CNPG cluster, MetalLB
+               pool, etc.) -- split out because these CRDs don't exist until
+               the addon itself has already reconciled once
 docs/        architecture notes, operational runbook, decision log
 ```
 
@@ -82,7 +87,36 @@ through:
 - `unifi/vlans.tf` and `unifi/firewall.tf` — the VLAN subnet/DHCP range
   and the isolation policy, if you're using UniFi too. If not, recreate
   the same idea (one VLAN, deny-by-default except explicit management
-  access) in whatever your gateway uses.
+  access) in whatever your gateway uses. Note: the TrueNAS-NFS and iot
+  policies partway down `firewall.tf` are this deployment's own later
+  additions for its own network, not part of the base pattern — skip or
+  adapt them, don't copy them as-is.
+
+Once Flux is bootstrapped (step 6), it'll also apply the addon manifests
+under `clusters/k8s-homelab/`. Several of those bake in this specific
+deployment's own domain (`jacobbanghart.com`), email, and Cloudflare/
+Authentik-account details — every file with one is marked with a
+`PERSONALIZE:` comment at the top. Find them all with:
+
+```bash
+grep -rl "PERSONALIZE:" clusters/
+```
+
+Currently: `external-dns/release.yaml`, `headlamp/ingressroute.yaml`,
+`headlamp/rbac.yaml`, `headlamp/release.yaml`,
+`monitoring/certificate.yaml`, `monitoring/release.yaml`,
+`traefik/release.yaml`, `vault/certificate-external.yaml`,
+`vault/ingressroute.yaml`, and
+`k8s-homelab-config/cert-manager/letsencrypt-cloudflare-issuer.yaml`
+(cross-referenced in `docs/runbook.md`'s Vault/Grafana sections too). The Authentik `client_id` values in `headlamp/release.yaml`
+and `monitoring/release.yaml` aren't secret but also aren't portable —
+you'll set up your own Authentik (or other OIDC provider) application and
+swap those in regardless.
+
+Also: `clusters/k8s-homelab/flux-apps/gitrepository.yaml` points at a
+second, private repo of this deployment's own personal app configs — it's
+optional (see the comment in that file); delete the directory if you
+don't want a second Flux source, or point it at your own.
 
 ### 2. Build the golden image (Packer)
 

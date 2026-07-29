@@ -1,3 +1,7 @@
+# PERSONALIZE: the OIDC binding below (oidc:jacobmbanghart@gmail.com) pins
+# cluster-admin to this deployment's own email -- replace with your own
+# OIDC identity's email before applying to your fork.
+#
 # ServiceAccount with cluster-admin for full cluster visibility in the
 # Headlamp UI. Kept as a fallback/manual-token path (works through the
 # internal headlamp.k8s-homelab... hostname) alongside the OIDC binding

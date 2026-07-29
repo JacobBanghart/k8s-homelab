@@ -1,3 +1,9 @@
+# PERSONALIZE: this file has several of this deployment's own values you
+# need to replace before applying to your fork -- grafana.k8s-homelab.
+# jacobbanghart.com (root_url/ingress hosts), auth.jacobbanghart.com plus
+# the Authentik client_id (OIDC provider URLs, not portable regardless),
+# and jacobmbanghart@gmail.com in role_attribute_path (pins Grafana Admin
+# to this specific email).
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:

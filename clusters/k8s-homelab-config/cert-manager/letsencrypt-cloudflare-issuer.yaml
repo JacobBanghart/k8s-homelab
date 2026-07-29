@@ -1,3 +1,7 @@
+# PERSONALIZE: the two "email:" fields below are this deployment's own
+# Let's Encrypt account email -- replace with your own before applying to
+# your fork.
+#
 # Real, browser-trusted certs via Let's Encrypt + Cloudflare DNS-01,
 # replacing the old self-signed k8s-homelab-ca-issuer for anything
 # Traefik-terminated (Vault's own internal listener cert is unrelated --

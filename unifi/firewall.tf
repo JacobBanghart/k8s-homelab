@@ -65,6 +65,14 @@ resource "unifi_firewall_policy" "allow_internal_to_k8s_lab" {
 }
 
 # =============================================================================
+# PERSONAL TO THIS DEPLOYMENT'S NETWORK -- everything below this line (the
+# TrueNAS-NFS and iot policies) is this deployment's own later addition for
+# its own home network, not part of the base k8s-lab isolation pattern
+# above. Skip both blocks entirely unless you have the same TrueNAS/
+# Home-Assistant setup; if you do, replace the IP/subnet below with yours.
+# =============================================================================
+
+# =============================================================================
 # k8s-lab -> TrueNAS (NFS, port 2049 only) -- added for the dev-cluster
 # migration (2026-07-19)
 # =============================================================================

@@ -1,3 +1,6 @@
+# PERSONALIZE: "jacobbanghart.com" below (line 36) is this deployment's own
+# domain -- replace with your own zone before applying to your fork.
+#
 # txtOwnerId is distinct from dev's own external-dns ("external-dns") so
 # the two clusters' instances never fight over the same Cloudflare
 # records during the migration -- policy: sync only ever touches records

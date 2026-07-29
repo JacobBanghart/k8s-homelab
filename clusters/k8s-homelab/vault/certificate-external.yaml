@@ -1,3 +1,7 @@
+# PERSONALIZE: the hostname below (vault.k8s-homelab.jacobbanghart.com) is
+# this deployment's own domain -- replace with your own before applying to
+# your fork.
+#
 # Real cert for Vault's EXTERNAL-facing hostname (what Traefik presents
 # to clients via ingressroute.yaml's bridging). Distinct from
 # certificate.yaml's vault-tls, which is Vault's own INTERNAL listener

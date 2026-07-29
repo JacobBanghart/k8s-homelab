@@ -1,3 +1,6 @@
+# PERSONALIZE: every "jacobbanghart.com" hostname below is this deployment's
+# own domain -- replace with your own before applying to your fork.
+#
 # Cluster-admin-scoped UI (see rbac.yaml). No basic-auth on either route --
 # Headlamp's own token login is the only gate on both, per explicit
 # decision (the static basic-auth credential was more friction than

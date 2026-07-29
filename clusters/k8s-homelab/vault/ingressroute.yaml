@@ -1,3 +1,7 @@
+# PERSONALIZE: the hostname below (vault.k8s-homelab.jacobbanghart.com) is
+# this deployment's own domain -- replace with your own before applying to
+# your fork.
+#
 # TLS bridging, not passthrough: Traefik terminates a real Cloudflare-
 # issued cert for external clients, then re-encrypts to Vault's backend
 # using serverstransport.yaml (which trusts Vault's own internal CA).

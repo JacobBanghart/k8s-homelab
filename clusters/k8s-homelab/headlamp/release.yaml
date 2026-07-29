@@ -1,3 +1,6 @@
+# PERSONALIZE: callbackURL below (dashboard.jacobbanghart.com) is this
+# deployment's own domain -- replace with your own before applying to your
+# fork, and update the matching Authentik/OIDC provider redirect URI.
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
