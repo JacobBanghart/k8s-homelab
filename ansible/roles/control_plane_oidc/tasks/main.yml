@@ -1,4 +1,9 @@
 ---
+# PERSONALIZE: --oidc-issuer-url and --oidc-client-id below (in the loop)
+# are this deployment's own Authentik application -- replace with your own
+# OIDC provider's values before enabling this role (see oidc_enabled in
+# ansible/inventory/group_vars/all.yml, off by default for new forks).
+#
 # Trusts Authentik as an OIDC issuer for kube-apiserver, so Headlamp
 # (and anything else that forwards an id_token as Bearer auth) can
 # authenticate real per-identity users instead of everyone sharing the

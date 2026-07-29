@@ -1,3 +1,8 @@
+# PERSONALIZE: the *.jacobbanghart.com and *.k8s-homelab.local domains in
+# dns_records below are this deployment's own -- replace with your own
+# domain (or drop the "_real" entries if you don't have a real domain
+# pointed at this cluster yet).
+#
 # =============================================================================
 # Pi-hole Local DNS Records - k8s-homelab cluster apps only
 #

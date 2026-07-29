@@ -11,8 +11,12 @@ Kubernetes cluster on Proxmox VMs, provisioned end-to-end from scratch:
    cloud-init for static IPs/hostnames/SSH keys.
 3. **Ansible** configures the OS and bootstraps the cluster in discrete,
    idempotent, tag-based stages (`common` -> `containerd` -> `kubeadm-init`
-   -> `cni` -> `join-masters` -> `join-workers` -> `metrics-server`), so
-   any stage can be re-run or resumed on its own.
+   -> `cni` -> `join-masters` -> `join-workers` -> `metrics-server` ->
+   `control-plane-vip` -> `control-plane-metrics` -> `control-plane-oidc`
+   -> `unattended-upgrades`), so any stage can be re-run or resumed on its
+   own. `control-plane-oidc` hardcodes this deployment's own OIDC
+   provider and defaults to enabled (`oidc_enabled: true`, see below) --
+   new forks should set it `false` until they've set up their own.
 4. **Flux** takes over from there for ongoing addons (storage, ingress,
    load balancing, etc.) — bootstrapped into `clusters/k8s-homelab/` in
    this same repo, synced from GitHub. New addons go in as Flux-managed
@@ -84,6 +88,16 @@ through:
   worker IPs and VM IDs (the `masters`/`workers` maps), disk sizing.
 - `ansible/inventory/hosts.ini` — must match whatever static IPs you put
   in `terraform/variables.tf`.
+- `ansible/inventory/group_vars/all.yml` — `control_plane_endpoint` and
+  `control_plane_vip` must also stay consistent with the VLAN subnet and
+  master IPs you chose in `terraform/variables.tf`/`unifi/vlans.tf`. Also
+  set `oidc_enabled: false` here (or override it in your own inventory)
+  until you've set up your own OIDC provider — it's `true` by default for
+  this deployment's own re-runs, but the `control-plane-oidc` role it
+  gates hardcodes this deployment's own Authentik issuer/client_id into
+  kube-apiserver (see that role's `PERSONALIZE` comment); a plain
+  `ansible-playbook playbook.yml` run with it left enabled points your
+  apiserver at an issuer you don't control, which can crash-loop it.
 - `unifi/vlans.tf` and `unifi/firewall.tf` — the VLAN subnet/DHCP range
   and the isolation policy, if you're using UniFi too. If not, recreate
   the same idea (one VLAN, deny-by-default except explicit management
@@ -91,27 +105,35 @@ through:
   policies partway down `firewall.tf` are this deployment's own later
   additions for its own network, not part of the base pattern — skip or
   adapt them, don't copy them as-is.
+- `unifi/pihole_dns.tf` — local DNS records for the cluster's apps;
+  replace the `jacobbanghart.com`/`.local` domains with your own (or drop
+  the `_real` entries if you're not pointing a real domain at this yet).
 
 Once Flux is bootstrapped (step 6), it'll also apply the addon manifests
 under `clusters/k8s-homelab/`. Several of those bake in this specific
 deployment's own domain (`jacobbanghart.com`), email, and Cloudflare/
-Authentik-account details — every file with one is marked with a
+Authentik-account details — every file with one, across the whole repo
+(Flux manifests, `unifi/`, and `ansible/`), is marked with a
 `PERSONALIZE:` comment at the top. Find them all with:
 
 ```bash
-grep -rl "PERSONALIZE:" clusters/
+grep -rl "PERSONALIZE:" .
 ```
 
-Currently: `external-dns/release.yaml`, `headlamp/ingressroute.yaml`,
-`headlamp/rbac.yaml`, `headlamp/release.yaml`,
-`monitoring/certificate.yaml`, `monitoring/release.yaml`,
-`traefik/release.yaml`, `vault/certificate-external.yaml`,
-`vault/ingressroute.yaml`, and
-`k8s-homelab-config/cert-manager/letsencrypt-cloudflare-issuer.yaml`
-(cross-referenced in `docs/runbook.md`'s Vault/Grafana sections too). The Authentik `client_id` values in `headlamp/release.yaml`
-and `monitoring/release.yaml` aren't secret but also aren't portable —
-you'll set up your own Authentik (or other OIDC provider) application and
-swap those in regardless.
+Currently: `clusters/k8s-homelab/{external-dns/release.yaml,
+headlamp/ingressroute.yaml, headlamp/rbac.yaml, headlamp/release.yaml,
+monitoring/certificate.yaml, monitoring/release.yaml,
+traefik/release.yaml, vault/certificate-external.yaml,
+vault/ingressroute.yaml}`,
+`clusters/k8s-homelab-config/cert-manager/letsencrypt-cloudflare-issuer.yaml`
+(cross-referenced in `docs/runbook.md`'s Vault/Grafana sections too),
+`unifi/pihole_dns.tf`, and
+`ansible/roles/control_plane_oidc/tasks/main.yml` (see the
+`ansible/inventory/group_vars/all.yml` bullet above for that last one).
+The Authentik `client_id` values in `headlamp/release.yaml` and
+`monitoring/release.yaml` aren't secret but also aren't portable — you'll
+set up your own Authentik (or other OIDC provider) application and swap
+those in regardless.
 
 Also: `clusters/k8s-homelab/flux-apps/gitrepository.yaml` points at a
 second, private repo of this deployment's own personal app configs — it's

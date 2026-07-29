@@ -14,3 +14,14 @@ control_plane_vip_router_id: 51
 # for interop) -- not a real secret, just here to stop stray VRRP traffic
 # on the same VLAN from a different project interfering.
 control_plane_vip_auth_pass: "k8shomelab-vrrp"
+
+# PERSONALIZE: gates the control_plane_oidc role (see its tasks/main.yml),
+# which hardcodes this deployment's own Authentik OIDC issuer URL and
+# client_id into kube-apiserver. Defaults to true so this deployment's own
+# re-runs of the playbook keep working unchanged -- if you're standing up
+# your own cluster, set this to `false` in your own inventory/group_vars
+# override until you've set up your own OIDC provider and replaced the
+# PERSONALIZE'd values in that role, otherwise a plain `ansible-playbook
+# playbook.yml` run will point your kube-apiserver at an issuer you don't
+# control (which can crash-loop it if unreachable).
+oidc_enabled: true
