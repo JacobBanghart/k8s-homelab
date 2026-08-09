@@ -62,8 +62,14 @@ variable "masters" {
   type = map(object({
     ip     = string
     vm_id  = number
-    cores  = optional(number, 2)
-    memory = optional(number, 4096)
+    cores  = optional(number, 6)
+    memory = optional(number, 6144)
+    # Ballooning floor. The guest boots at `memory` and the host may reclaim
+    # down to this under pressure, never below. Keep it comfortably above the
+    # node's real working set -- kubelet computes allocatable from MemTotal at
+    # startup and does not learn about balloon inflation, so a floor set below
+    # actual usage shows up as OOM kills rather than as scheduling pressure.
+    memory_min = optional(number, 4096)
   }))
   default = {
     k8s-master-0 = { ip = "10.4.0.10", vm_id = 9101 }
@@ -77,8 +83,12 @@ variable "workers" {
   type = map(object({
     ip     = string
     vm_id  = number
-    cores  = optional(number, 6)
-    memory = optional(number, 12288)
+    cores  = optional(number, 20)
+    memory = optional(number, 27648)
+    # See the note on masters.memory_min. Workers sit around 17.5GiB in steady
+    # state (Ceph OSDs, Vault, CNPG, runners), so 20GiB is the floor that keeps
+    # ~7GiB per worker reclaimable by the host without ever squeezing kubelet.
+    memory_min = optional(number, 20480)
   }))
   default = {
     k8s-worker-0 = { ip = "10.4.0.20", vm_id = 9111 }

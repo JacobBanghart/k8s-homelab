@@ -1144,3 +1144,53 @@ generates it, but this hasn't been confirmed against a live cluster
 yet -- check `kubectl -n monitoring get secret grafana-postgres-app -o
 jsonpath='{.data}'` after the Cluster reconciles, before assuming the
 Grafana rollout will actually come up healthy.
+
+## VM memory: ballooning with a floor, not fixed allocation (2026-08-09)
+
+`memory { dedicated = ... }` with no `floating` makes the bpg provider emit
+`balloon: 0`, which disables the balloon device entirely -- every VM held
+its full allocation whether or not it was using it. With 104GB of 125GB
+committed to running VMs, the host had ~24GB free while the three workers
+were collectively sitting on ~39GB they weren't touching (17.5/15.6/9.1GB
+actual against 27GB each).
+
+Added `memory_min` per node and wired it to `floating`, so the host can
+reclaim down to a floor: masters 6144/4096, workers 27648/20480. Host
+available RAM went 25GB -> 35GB immediately, with nothing shut down.
+
+The floor is deliberately set *above* each node's real working set rather
+than as low as it could go. kubelet computes `allocatable` from MemTotal at
+startup and never learns about balloon inflation, so a floor below actual
+usage does not show up as scheduling pressure -- it shows up as OOM kills.
+20GB against a ~17.5GB steady state is the margin; do not lower it without
+re-measuring `kubectl top nodes` first.
+
+Prompted by wanting to free ~30GB for an unrelated experiment on VM 103
+without shutting a worker down. Shutting one down was the original plan and
+is much worse: with Ceph at `failureDomain: host` over exactly 3 workers,
+losing a node means zero redundancy for the entire duration and no ability
+to self-heal (nowhere to place the third replica).
+
+Two traps found applying this, both worth knowing before the next change to
+these resources:
+
+- **Terraform state had drifted badly from reality.** The code said workers
+  were 12288MB/6 cores and masters 4096MB/2; live they were 27648/20 and
+  6144/6 -- hand-resized with `qm set` at some point and never reflected
+  back. A plain `terraform apply` would have *shrunk* every worker below
+  its working set. The defaults in `variables.tf` are now reconciled to the
+  live values; keep them that way, or move them into `terraform.tfvars`.
+- **The provider reboots the VM** to attach the balloon device; this is not
+  a live change. Terraform's default parallelism would have rebooted all
+  three workers simultaneously and taken Ceph below `min_size`. Roll these
+  one at a time (`-target`, `-parallelism=1`) with health gates between --
+  see `docs/runbook.md`, "Draining a worker: CNPG and Ceph prerequisites".
+
+Not verified: behaviour under actual host memory pressure. The balloon has
+been enabled and the guests report stats correctly (`qm monitor <id>` ->
+`info balloon` shows guest-supplied `total_mem`/`free_mem`, which only
+appears when the driver is live -- `CONFIG_VIRTIO_BALLOON=y`, built in, so
+it never shows in `lsmod`), but the host has not yet been squeezed hard
+enough to force real reclamation down toward the floor. The failure mode to
+watch for if it is: kubelet evicting or OOM-killing pods on a node whose
+MemTotal it still believes is 27GB.

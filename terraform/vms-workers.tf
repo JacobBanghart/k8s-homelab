@@ -17,6 +17,7 @@ resource "proxmox_virtual_environment_vm" "worker" {
 
   memory {
     dedicated = each.value.memory
+    floating  = each.value.memory_min
   }
 
   agent {

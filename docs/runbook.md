@@ -184,6 +184,74 @@ kubectl --context k8s-homelab exec -n rook-ceph deploy/rook-ceph-tools -- \
 # (or just: kubectl get pods -n kube-system -l component=etcd)
 ```
 
+### Draining a worker: CNPG and Ceph prerequisites
+
+The bare `cordon`/`drain` above is enough for a master, but not for a
+worker. Two things will bite:
+
+**1. CNPG refuses to let you drain a Postgres primary.** The operator
+creates two PodDisruptionBudgets per cluster: `<cluster>` (minAvailable 1,
+all instances) and `<cluster>-primary` (minAvailable 1, selecting only the
+primary). The second reports `disruptionsAllowed: 0` permanently, by
+design. A drain of the node holding a primary hangs indefinitely rather
+than failing with a useful error. Switch over first, onto a node you are
+not about to drain:
+
+```bash
+# where does each primary actually live?
+kubectl get pods -A -l cnpg.io/instanceRole=primary \
+  -o custom-columns=NS:.metadata.namespace,POD:.metadata.name,NODE:.spec.nodeName
+
+# graceful switchover, then wait for it to settle
+kubectl cnpg promote <cluster> <instance-on-another-node> -n <namespace>
+kubectl get cluster -A   # both must read "Cluster in healthy state"
+```
+
+This needs the `kubectl-cnpg` plugin, version-matched to the operator
+(`kubectl -n cnpg-system get deploy cnpg-cloudnative-pg -o \
+jsonpath='{.spec.template.spec.containers[0].image}'`). It is a client-side
+CLI only -- there is nothing to deploy in-cluster, the operator already
+running does the actual work. There is deliberately no declarative
+equivalent: a switchover is an imperative operation like `drain` itself,
+not desired state, so it does not belong in Flux. `nodeMaintenanceWindow`
+only controls PVC reuse, and `enablePDB: false` deletes the guard outright
+(the CNPG docs scope that to dev/staging clusters).
+
+When rolling all three workers, move both primaries onto one node, roll the
+other two, then move them again for the last -- two switchover rounds
+instead of three. Spread the primaries across different hosts when you put
+them back, so the next maintenance only has to move one.
+
+**2. Set `noout` so Ceph does not start re-replicating.** With
+`failureDomain: host` over exactly 3 workers there is nowhere to place a
+third replica anyway, so recovery churn during a short reboot is pure
+waste:
+
+```bash
+kubectl -n rook-ceph exec deploy/rook-ceph-tools -- ceph osd set noout
+# ... cordon, drain, reboot, uncordon ...
+kubectl -n rook-ceph exec deploy/rook-ceph-tools -- ceph osd unset noout
+```
+
+Always confirm it cleared -- a forgotten `noout` silently disables OSD
+auto-recovery, and nothing surfaces that fact:
+
+```bash
+kubectl -n rook-ceph exec deploy/rook-ceph-tools -- ceph osd dump | grep ^flags
+```
+
+Then wait for genuine recovery before the next node: `81 active+clean` and
+`6 osds: 6 up ... 6 in`. Do not gate on `HEALTH_OK` -- this cluster carries
+a standing `MON_DISK_LOW` warning, so it is `HEALTH_WARN` even when fully
+healthy.
+
+If you script this, resolve the tools pod on **every** call (use
+`deploy/rook-ceph-tools`, or re-query the pod name). Caching the pod name
+once at the top of a rolling script is a trap: the tools pod may itself be
+evicted by the drain and return under a new name, after which every health
+check silently returns empty and the script either spins forever or, worse,
+bails through a path that never unsets `noout`.
+
 ### Kubernetes version upgrades
 
 Not automated -- `kubeadm`/`kubectl`/`kubelet` are held specifically so this
