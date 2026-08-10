@@ -19,7 +19,11 @@ metadata:
   annotations:
     # Internal admin tool, resolved via Pi-hole only -- keep it off
     # external-dns's public Cloudflare records.
-    external-dns.alpha.kubernetes.io/exclude: "true"
+    # external-dns has no "exclude" annotation -- that key is silently
+    # ignored, which is why it never kept anything unpublished. The real
+    # opt-out is the controller key: any value other than "dns-controller"
+    # makes every source skip the object.
+    external-dns.alpha.kubernetes.io/controller: "none"
 spec:
   entryPoints:
     - websecure

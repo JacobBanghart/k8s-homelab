@@ -21,7 +21,11 @@ metadata:
   name: headlamp-internal
   namespace: headlamp
   annotations:
-    external-dns.alpha.kubernetes.io/exclude: "true"
+    # external-dns has no "exclude" annotation -- that key is silently
+    # ignored, which is why it never kept anything unpublished. The real
+    # opt-out is the controller key: any value other than "dns-controller"
+    # makes every source skip the object.
+    external-dns.alpha.kubernetes.io/controller: "none"
 spec:
   entryPoints:
     - websecure
@@ -49,7 +53,11 @@ metadata:
     # "external-dns", resource ingress/kubernetes-dashboard). external-dns did
     # not own it, so nothing here managed or removed it. That record has been
     # deleted; this annotation stops it coming back.
-    external-dns.alpha.kubernetes.io/exclude: "true"
+    # external-dns has no "exclude" annotation -- that key is silently
+    # ignored, which is why it never kept anything unpublished. The real
+    # opt-out is the controller key: any value other than "dns-controller"
+    # makes every source skip the object.
+    external-dns.alpha.kubernetes.io/controller: "none"
 spec:
   entryPoints:
     - websecure
