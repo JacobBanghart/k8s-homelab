@@ -83,12 +83,20 @@ variable "workers" {
   type = map(object({
     ip     = string
     vm_id  = number
-    cores  = optional(number, 20)
-    memory = optional(number, 27648)
-    # See the note on masters.memory_min. Workers sit around 17.5GiB in steady
-    # state (Ceph OSDs, Vault, CNPG, runners), so 20GiB is the floor that keeps
-    # ~7GiB per worker reclaimable by the host without ever squeezing kubelet.
-    memory_min = optional(number, 20480)
+    cores = optional(number, 20)
+    # 15GiB, down from 27GiB (2026-08-09). Measured steady state after a clean
+    # reboot is 6.6-9.3GiB per worker, against 25.8GiB of pod requests across
+    # the whole cluster -- so 3x15GiB leaves it ~56% committed and still
+    # absorbs a full node drain onto the remaining two. The old 27GiB was sized
+    # off a `kubectl top` reading inflated by weeks of accumulated guest page
+    # cache, not by anything the workloads actually needed.
+    memory = optional(number, 15360)
+    # See the note on masters.memory_min. Do NOT read this as
+    # reclaimable-on-demand: ballooning a guest that has already filled its page
+    # cache returns memory slowly and unreliably, and not at all fast enough for
+    # a VFIO pin. Booting the guest smaller is what actually gives RAM back to
+    # the host; this floor only bounds how far it can be squeezed afterwards.
+    memory_min = optional(number, 12288)
   }))
   default = {
     k8s-worker-0 = { ip = "10.4.0.20", vm_id = 9111 }
