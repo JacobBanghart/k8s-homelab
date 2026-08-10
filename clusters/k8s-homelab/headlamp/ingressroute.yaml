@@ -39,6 +39,17 @@ kind: IngressRoute
 metadata:
   name: headlamp-public
   namespace: headlamp
+  annotations:
+    # No public DNS for a Kubernetes UI. The route stays so the host is
+    # reachable in-cluster and by IP + Host header, but the name is not
+    # published -- same stance as vault and headlamp-internal.
+    #
+    # This was publicly resolvable until 2026-08-10 through a leftover
+    # dashboard.jacobbanghart.com record from the dead k3s cluster (TXT owner
+    # "external-dns", resource ingress/kubernetes-dashboard). external-dns did
+    # not own it, so nothing here managed or removed it. That record has been
+    # deleted; this annotation stops it coming back.
+    external-dns.alpha.kubernetes.io/exclude: "true"
 spec:
   entryPoints:
     - websecure
