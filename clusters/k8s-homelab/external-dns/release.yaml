@@ -64,7 +64,11 @@ spec:
       # Upstream marks this flag deprecated. If a chart bump drops it, the
       # replacement is a per-resource
       # external-dns.alpha.kubernetes.io/target annotation on every app.
-      - --force-default-targets=true
+      #
+      # No "=true": this is a kingpin bool flag, which takes the bare form or
+      # --no-force-default-targets. Passing a value crashes the process at
+      # startup with "flag parsing error: unexpected true".
+      - --force-default-targets
     podAnnotations:
       prometheus.io/scrape: "true"
       prometheus.io/port: "7979"
