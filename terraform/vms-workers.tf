@@ -24,10 +24,17 @@ resource "proxmox_virtual_environment_vm" "worker" {
     enabled = true
   }
 
+  # ssd = true on every disk: var.storage_pool is the `nvme` datastore, so all
+  # of these are NVMe-backed. Without this the guest sees
+  # /sys/block/sdX/queue/rotational = 1 and every layer above tunes for spinning
+  # rust -- Ceph in particular picked its `hdd` BlueStore cache sizes and shard
+  # counts, and classed all six OSDs as `hdd` in CRUSH. Set 2026-08-09.
+  # Takes effect on VM restart; the flag is a device property, not live-settable.
   disk {
     datastore_id = var.storage_pool
     interface    = "scsi0"
     size         = 60
+    ssd          = true
   }
 
   # Dedicated raw block device for Rook/Ceph OSD backing — left unformatted,
@@ -36,6 +43,7 @@ resource "proxmox_virtual_environment_vm" "worker" {
     datastore_id = var.storage_pool
     interface    = "scsi1"
     size         = var.ceph_osd_disk_size
+    ssd          = true
   }
 
   # Second OSD disk added ahead of the dev-cluster migration -- original
@@ -47,6 +55,7 @@ resource "proxmox_virtual_environment_vm" "worker" {
     datastore_id = var.storage_pool
     interface    = "scsi2"
     size         = var.ceph_osd_disk_size_2
+    ssd          = true
   }
 
   network_device {

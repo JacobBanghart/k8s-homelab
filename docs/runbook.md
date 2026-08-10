@@ -252,6 +252,82 @@ evicted by the drain and return under a new name, after which every health
 check silently returns empty and the script either spins forever or, worse,
 bails through a path that never unsets `noout`.
 
+### Rebooting a worker: the drain cannot complete (2026-08-09)
+
+**Do not drain a worker to reboot it. It deadlocks.** Each worker holds two
+OSDs, and Rook's `rook-ceph-osd` PDB is `maxUnavailable: 1`. Evicting the
+first OSD consumes the whole budget, so the second is refused forever:
+
+```
+rook-ceph-osd-3   Pending   node=<none>   <- evicted, cannot reschedule (node cordoned)
+rook-ceph-osd-1   Running   worker-1      <- blocked: PDB allowed disruptions 0
+```
+
+`kubectl drain` then hangs until its timeout with no useful error. Worse, the
+OSD it already evicted cannot come back while the node is cordoned -- OSDs are
+pinned to the node holding their disk -- so the cluster sits degraded for the
+whole attempt. Uncordon to recover.
+
+Reboot without draining instead. It is safe and it is what actually happened
+on the nodes that appeared to drain cleanly: their OSDs went down via the
+reboot, not the eviction.
+
+```bash
+kubectl -n rook-ceph exec deploy/rook-ceph-tools -- ceph osd set noout
+# move CNPG primaries off this node first (see above)
+# then stop/start the VM; do NOT cordon -- a cordoned node cannot take its
+# OSDs back, and OSD pods are recreated rather than restarted
+kubectl -n rook-ceph exec deploy/rook-ceph-tools -- ceph osd unset noout
+```
+
+Gate on `6 osds ... 6 up` plus `ceph pg stat` showing no
+degraded/misplaced/peering, then confirm `noout` actually cleared.
+
+Two further traps found the same day:
+
+- **The tools pod may become unschedulable**, not just renamed. After the
+  27GiB -> 15GiB worker downsize, evicting it produced `0/6 nodes available:
+  2 Insufficient memory` and it sat `Pending`, so every `ceph` call returned
+  empty output rather than an error. If health checks go silent mid-procedure,
+  check the tools pod is Running before believing anything.
+- **`status/reset` does not apply VM config changes.** It is a virtual reset
+  button: same QEMU process, same device config. Anything requiring a config
+  re-read (disk flags, memory, balloon) needs a full
+  `status/shutdown` then `status/start`.
+
+### Marking the OSD disks as SSD (done 2026-08-09)
+
+All OSD disks live on the `nvme` datastore but were exposed with `ssd=0`, so
+guests reported `/sys/block/sdX/queue/rotational = 1` and Ceph tuned every OSD
+for spinning rust. Fixed by `ssd = true` on all three disks in
+`terraform/vms-workers.tf`.
+
+`terraform apply` only rewrites the VM config (completes in ~1s, no reboot) --
+the flag is a device property, so each worker needs a stop/start before the
+guest sees `rotational = 0`.
+
+Ceph does **not** reclassify existing OSDs when the flag flips; device class is
+recorded at OSD creation. Reclassify explicitly:
+
+```bash
+kubectl -n rook-ceph exec deploy/rook-ceph-tools -- ceph osd crush rm-device-class osd.0 osd.1 osd.2 osd.3 osd.4 osd.5
+kubectl -n rook-ceph exec deploy/rook-ceph-tools -- ceph osd crush set-device-class ssd osd.0 osd.1 osd.2 osd.3 osd.4 osd.5
+```
+
+This moved **zero** data, because no CRUSH rule pins a device class -- every
+rule here is a bare `step take default`. Verify that before reclassifying any
+cluster: if a rule said `take default class hdd`, reclassifying every OSD to
+`ssd` would leave the rule matching nothing and take the data offline.
+
+Measured effect, combined with `replicapool` pg_num 32 -> 128 the same day:
+
+| | before | after |
+| --- | --- | --- |
+| OSD %USE spread | 22.8 - 51.2 | 34.4 - 41.6 |
+| STDDEV | 11.18 | 2.66 |
+| `MAX AVAIL` | 127 GiB | 160 GiB |
+| total META | 8.5 GiB | 3.1 GiB |
+
 ### Kubernetes version upgrades
 
 Not automated -- `kubeadm`/`kubectl`/`kubelet` are held specifically so this
