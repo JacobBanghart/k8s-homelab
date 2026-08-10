@@ -41,6 +41,30 @@ spec:
     txtOwnerId: k8s-homelab
     extraArgs:
       - --cloudflare-dns-records-per-page=5000
+      # Publish the WAN address rather than whatever IP the source reports.
+      #
+      # Every app here fronts on Traefik, whose Service is a MetalLB
+      # LoadBalancer on VLAN 30, so the source address is always 10.4.0.200 --
+      # an RFC1918 address. Published to public DNS that resolves on the LAN
+      # and is unreachable from anywhere else, which is how
+      # labels.jacobbanghart.com came to be live and simultaneously dead to
+      # the internet. The k3s cluster never hit this: Traefik was reached
+      # through the node, and the node's declared ExternalIP was the WAN
+      # address, so that is what external-dns published.
+      #
+      # WAN:443 is forwarded to 10.4.0.200 by unifi_port_forward.dev_https in
+      # UnifiTerraform/port_forwards.tf. Residential IP: if the ISP changes
+      # it, this line changes with it.
+      - --default-targets=68.170.78.3
+      # Required. On its own --default-targets is only a fallback for sources
+      # that report NO target; the ingress and traefik-proxy sources always
+      # report one, so it would log "ignoring default targets" and keep the
+      # MetalLB VIP. Only --force-default-targets actually overrides them.
+      #
+      # Upstream marks this flag deprecated. If a chart bump drops it, the
+      # replacement is a per-resource
+      # external-dns.alpha.kubernetes.io/target annotation on every app.
+      - --force-default-targets=true
     podAnnotations:
       prometheus.io/scrape: "true"
       prometheus.io/port: "7979"
