@@ -1194,3 +1194,56 @@ it never shows in `lsmod`), but the host has not yet been squeezed hard
 enough to force real reclamation down toward the floor. The failure mode to
 watch for if it is: kubelet evicting or OOM-killing pods on a node whose
 MemTotal it still believes is 27GB.
+
+## Porting dev-era app manifests: re-derive the resource block, don't copy it (2026-08-09)
+
+Stood up a new Minecraft server (Homestead, MC 1.20.1/Fabric) by copying the
+old k3s `atm10` manifest out of git history (`flux`, `91cbad1^`) and editing
+it. Four of its fields could not survive the move, and only one of them
+fails loudly -- worth knowing before the remaining migrations
+(`external_dns`, `headlamp`, `nfs-driver`, `traefik`) get the same treatment.
+
+The dev server was a single VM with 220 vCPUs and ~94GB RAM, so `atm10` asked
+for `cpu: 64` / `memory: 64Gi` limits and a 12G->64G heap. k8s-homelab
+workers are 20 cores and ~12-15Gi *allocatable* (see "VM memory: ballooning
+with a floor"), so that block is not merely oversized, it is unschedulable --
+the pod sits Pending with no obvious cause if you don't think to compare
+against node capacity. Re-derived as `cpu: 2/8`, `memory: 6Gi/10Gi`, 4G->8G
+heap.
+
+The three quiet ones:
+
+- **Storage class.** `nfs-rwx-ephemeral` doesn't exist here; the cluster is
+  Rook Ceph with `ceph-block` (default, RWO) and `ceph-filesystem` (RWX). For
+  a single-writer workload RWO on `ceph-block` is the better fit anyway, but
+  it forces `strategy: Recreate` -- a RollingUpdate deadlocks because the new
+  pod can't attach a volume the old one still holds.
+- **GC flags.** `atm10` pinned `ActiveProcessorCount=64` plus explicit
+  `ParallelGCThreads`/`ConcGCThreads` sized for the old host. Carried over
+  verbatim the JVM would build GC pools for cores the cgroup won't grant.
+  Keep `ActiveProcessorCount` pinned to the CPU *limit* and let Aikar's flags
+  derive the rest; drop the explicit thread counts rather than rescaling them.
+- **Secret source.** dev used plain Secrets committed alongside the manifest
+  (`serverk8sdeploywithk3s/curseforge-secret.yaml` still has a live
+  CurseForge API key in git -- rotate). Here it's Vault + ESO, so the key
+  moved to `secret/minecraft/curseforge` and the manifest gets an
+  `ExternalSecret` against `vault-backend`.
+
+Also dropped the `external-dns.alpha.kubernetes.io/hostname` annotation.
+external-dns *does* run here with `--source=service`, so unlike a genuinely
+absent controller the annotation would have taken effect -- and published a
+private MetalLB IP into public Cloudflare DNS. External players reach the
+server through the UDM port forward (`WAN:25566 -> 10.4.0.202:25565`,
+`UnifiTerraform/port_forwards.tf`), never that record. No other LoadBalancer
+on this cluster is annotated either.
+
+One benign-looking failure that is genuinely benign: Fabric logs an
+`EntrypointException` / `ClassNotFoundException` for client-only mod compat
+entrypoints (`fallingtrees` -> Jade). It is caught and logged, not fatal --
+the server reached `Done (11.863s)!` with 494 mods while that stack trace was
+still on screen. Don't diagnose it as a crash.
+
+Not verified: external reachability from off-network. The Minecraft
+server-list ping succeeds through `jacobbanghart.com:25566`, but that test
+ran from inside the LAN and so traversed hairpin NAT. It proves the DNAT rule
+applies; it does not rule out an ISP-side block on 25566.

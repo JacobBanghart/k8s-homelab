@@ -537,6 +537,39 @@ VAULT_TOKEN` after logging in to confirm you're actually running as
 the OIDC identity (`vault token lookup` should show `display_name:
 oidc-<email>`, not the root token).
 
+### "I logged into the UI but there are no secrets"
+
+Expected, and not a permissions bug to go chasing. The Vault UI's OIDC
+login form has an optional **Role** field. Leave it blank and Vault uses
+the `default` role, which grants only the built-in `default` policy —
+`lookup-self`, `renew-self`, `revoke-self`, `capabilities-self`, and your
+own identity entity. It has **no capability on any KV path**, so the
+secrets browser is legitimately empty and nothing is wrong.
+
+Type `admin` into that Role field. Both roles already permit the UI's
+redirect URI, so no reconfiguration is needed:
+
+| OIDC role | Policy | KV access |
+| --------- | ------ | --------- |
+| `default` (used when Role is blank) | `default` | none |
+| `admin` (must be typed in) | `admin` (`path "*"`) | full |
+
+The `admin` role is additionally gated by `bound_claims` on
+`email: jacobmbanghart@gmail.com`, so it only works for that Authentik
+identity — a second user typing `admin` is rejected rather than elevated.
+
+Same trap on the CLI, where `role` is a **key=value argument, not a
+flag**. `vault login -method=oidc -role=admin` fails with `flag provided
+but not defined: -role`; the correct form is `role=admin`. Also note the
+`vault` binary on this workstation is v2.x (via brew), whose help output
+resembles 1.x closely enough that a flag error looks like a wrong binary.
+
+To confirm which policies a session actually holds:
+
+```bash
+vault token lookup -format=json | jq '.data.policies, .data.meta.role'
+```
+
 ## Grafana (monitoring stack)
 
 > PERSONALIZE: `grafana.k8s-homelab.jacobbanghart.com`,
