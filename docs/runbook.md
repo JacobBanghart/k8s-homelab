@@ -184,6 +184,150 @@ kubectl --context k8s-homelab exec -n rook-ceph deploy/rook-ceph-tools -- \
 # (or just: kubectl get pods -n kube-system -l component=etcd)
 ```
 
+### Draining a worker: CNPG and Ceph prerequisites
+
+The bare `cordon`/`drain` above is enough for a master, but not for a
+worker. Two things will bite:
+
+**1. CNPG refuses to let you drain a Postgres primary.** The operator
+creates two PodDisruptionBudgets per cluster: `<cluster>` (minAvailable 1,
+all instances) and `<cluster>-primary` (minAvailable 1, selecting only the
+primary). The second reports `disruptionsAllowed: 0` permanently, by
+design. A drain of the node holding a primary hangs indefinitely rather
+than failing with a useful error. Switch over first, onto a node you are
+not about to drain:
+
+```bash
+# where does each primary actually live?
+kubectl get pods -A -l cnpg.io/instanceRole=primary \
+  -o custom-columns=NS:.metadata.namespace,POD:.metadata.name,NODE:.spec.nodeName
+
+# graceful switchover, then wait for it to settle
+kubectl cnpg promote <cluster> <instance-on-another-node> -n <namespace>
+kubectl get cluster -A   # both must read "Cluster in healthy state"
+```
+
+This needs the `kubectl-cnpg` plugin, version-matched to the operator
+(`kubectl -n cnpg-system get deploy cnpg-cloudnative-pg -o \
+jsonpath='{.spec.template.spec.containers[0].image}'`). It is a client-side
+CLI only -- there is nothing to deploy in-cluster, the operator already
+running does the actual work. There is deliberately no declarative
+equivalent: a switchover is an imperative operation like `drain` itself,
+not desired state, so it does not belong in Flux. `nodeMaintenanceWindow`
+only controls PVC reuse, and `enablePDB: false` deletes the guard outright
+(the CNPG docs scope that to dev/staging clusters).
+
+When rolling all three workers, move both primaries onto one node, roll the
+other two, then move them again for the last -- two switchover rounds
+instead of three. Spread the primaries across different hosts when you put
+them back, so the next maintenance only has to move one.
+
+**2. Set `noout` so Ceph does not start re-replicating.** With
+`failureDomain: host` over exactly 3 workers there is nowhere to place a
+third replica anyway, so recovery churn during a short reboot is pure
+waste:
+
+```bash
+kubectl -n rook-ceph exec deploy/rook-ceph-tools -- ceph osd set noout
+# ... cordon, drain, reboot, uncordon ...
+kubectl -n rook-ceph exec deploy/rook-ceph-tools -- ceph osd unset noout
+```
+
+Always confirm it cleared -- a forgotten `noout` silently disables OSD
+auto-recovery, and nothing surfaces that fact:
+
+```bash
+kubectl -n rook-ceph exec deploy/rook-ceph-tools -- ceph osd dump | grep ^flags
+```
+
+Then wait for genuine recovery before the next node: `81 active+clean` and
+`6 osds: 6 up ... 6 in`. Do not gate on `HEALTH_OK` -- this cluster carries
+a standing `MON_DISK_LOW` warning, so it is `HEALTH_WARN` even when fully
+healthy.
+
+If you script this, resolve the tools pod on **every** call (use
+`deploy/rook-ceph-tools`, or re-query the pod name). Caching the pod name
+once at the top of a rolling script is a trap: the tools pod may itself be
+evicted by the drain and return under a new name, after which every health
+check silently returns empty and the script either spins forever or, worse,
+bails through a path that never unsets `noout`.
+
+### Rebooting a worker: the drain cannot complete (2026-08-09)
+
+**Do not drain a worker to reboot it. It deadlocks.** Each worker holds two
+OSDs, and Rook's `rook-ceph-osd` PDB is `maxUnavailable: 1`. Evicting the
+first OSD consumes the whole budget, so the second is refused forever:
+
+```
+rook-ceph-osd-3   Pending   node=<none>   <- evicted, cannot reschedule (node cordoned)
+rook-ceph-osd-1   Running   worker-1      <- blocked: PDB allowed disruptions 0
+```
+
+`kubectl drain` then hangs until its timeout with no useful error. Worse, the
+OSD it already evicted cannot come back while the node is cordoned -- OSDs are
+pinned to the node holding their disk -- so the cluster sits degraded for the
+whole attempt. Uncordon to recover.
+
+Reboot without draining instead. It is safe and it is what actually happened
+on the nodes that appeared to drain cleanly: their OSDs went down via the
+reboot, not the eviction.
+
+```bash
+kubectl -n rook-ceph exec deploy/rook-ceph-tools -- ceph osd set noout
+# move CNPG primaries off this node first (see above)
+# then stop/start the VM; do NOT cordon -- a cordoned node cannot take its
+# OSDs back, and OSD pods are recreated rather than restarted
+kubectl -n rook-ceph exec deploy/rook-ceph-tools -- ceph osd unset noout
+```
+
+Gate on `6 osds ... 6 up` plus `ceph pg stat` showing no
+degraded/misplaced/peering, then confirm `noout` actually cleared.
+
+Two further traps found the same day:
+
+- **The tools pod may become unschedulable**, not just renamed. After the
+  27GiB -> 15GiB worker downsize, evicting it produced `0/6 nodes available:
+  2 Insufficient memory` and it sat `Pending`, so every `ceph` call returned
+  empty output rather than an error. If health checks go silent mid-procedure,
+  check the tools pod is Running before believing anything.
+- **`status/reset` does not apply VM config changes.** It is a virtual reset
+  button: same QEMU process, same device config. Anything requiring a config
+  re-read (disk flags, memory, balloon) needs a full
+  `status/shutdown` then `status/start`.
+
+### Marking the OSD disks as SSD (done 2026-08-09)
+
+All OSD disks live on the `nvme` datastore but were exposed with `ssd=0`, so
+guests reported `/sys/block/sdX/queue/rotational = 1` and Ceph tuned every OSD
+for spinning rust. Fixed by `ssd = true` on all three disks in
+`terraform/vms-workers.tf`.
+
+`terraform apply` only rewrites the VM config (completes in ~1s, no reboot) --
+the flag is a device property, so each worker needs a stop/start before the
+guest sees `rotational = 0`.
+
+Ceph does **not** reclassify existing OSDs when the flag flips; device class is
+recorded at OSD creation. Reclassify explicitly:
+
+```bash
+kubectl -n rook-ceph exec deploy/rook-ceph-tools -- ceph osd crush rm-device-class osd.0 osd.1 osd.2 osd.3 osd.4 osd.5
+kubectl -n rook-ceph exec deploy/rook-ceph-tools -- ceph osd crush set-device-class ssd osd.0 osd.1 osd.2 osd.3 osd.4 osd.5
+```
+
+This moved **zero** data, because no CRUSH rule pins a device class -- every
+rule here is a bare `step take default`. Verify that before reclassifying any
+cluster: if a rule said `take default class hdd`, reclassifying every OSD to
+`ssd` would leave the rule matching nothing and take the data offline.
+
+Measured effect, combined with `replicapool` pg_num 32 -> 128 the same day:
+
+| | before | after |
+| --- | --- | --- |
+| OSD %USE spread | 22.8 - 51.2 | 34.4 - 41.6 |
+| STDDEV | 11.18 | 2.66 |
+| `MAX AVAIL` | 127 GiB | 160 GiB |
+| total META | 8.5 GiB | 3.1 GiB |
+
 ### Kubernetes version upgrades
 
 Not automated -- `kubeadm`/`kubectl`/`kubelet` are held specifically so this
@@ -468,6 +612,39 @@ takes precedence over the freshly stored login token — `unset
 VAULT_TOKEN` after logging in to confirm you're actually running as
 the OIDC identity (`vault token lookup` should show `display_name:
 oidc-<email>`, not the root token).
+
+### "I logged into the UI but there are no secrets"
+
+Expected, and not a permissions bug to go chasing. The Vault UI's OIDC
+login form has an optional **Role** field. Leave it blank and Vault uses
+the `default` role, which grants only the built-in `default` policy —
+`lookup-self`, `renew-self`, `revoke-self`, `capabilities-self`, and your
+own identity entity. It has **no capability on any KV path**, so the
+secrets browser is legitimately empty and nothing is wrong.
+
+Type `admin` into that Role field. Both roles already permit the UI's
+redirect URI, so no reconfiguration is needed:
+
+| OIDC role | Policy | KV access |
+| --------- | ------ | --------- |
+| `default` (used when Role is blank) | `default` | none |
+| `admin` (must be typed in) | `admin` (`path "*"`) | full |
+
+The `admin` role is additionally gated by `bound_claims` on
+`email: jacobmbanghart@gmail.com`, so it only works for that Authentik
+identity — a second user typing `admin` is rejected rather than elevated.
+
+Same trap on the CLI, where `role` is a **key=value argument, not a
+flag**. `vault login -method=oidc -role=admin` fails with `flag provided
+but not defined: -role`; the correct form is `role=admin`. Also note the
+`vault` binary on this workstation is v2.x (via brew), whose help output
+resembles 1.x closely enough that a flag error looks like a wrong binary.
+
+To confirm which policies a session actually holds:
+
+```bash
+vault token lookup -format=json | jq '.data.policies, .data.meta.role'
+```
 
 ## Grafana (monitoring stack)
 

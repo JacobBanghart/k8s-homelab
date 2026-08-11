@@ -1144,3 +1144,106 @@ generates it, but this hasn't been confirmed against a live cluster
 yet -- check `kubectl -n monitoring get secret grafana-postgres-app -o
 jsonpath='{.data}'` after the Cluster reconciles, before assuming the
 Grafana rollout will actually come up healthy.
+
+## VM memory: ballooning with a floor, not fixed allocation (2026-08-09)
+
+`memory { dedicated = ... }` with no `floating` makes the bpg provider emit
+`balloon: 0`, which disables the balloon device entirely -- every VM held
+its full allocation whether or not it was using it. With 104GB of 125GB
+committed to running VMs, the host had ~24GB free while the three workers
+were collectively sitting on ~39GB they weren't touching (17.5/15.6/9.1GB
+actual against 27GB each).
+
+Added `memory_min` per node and wired it to `floating`, so the host can
+reclaim down to a floor: masters 6144/4096, workers 27648/20480. Host
+available RAM went 25GB -> 35GB immediately, with nothing shut down.
+
+The floor is deliberately set *above* each node's real working set rather
+than as low as it could go. kubelet computes `allocatable` from MemTotal at
+startup and never learns about balloon inflation, so a floor below actual
+usage does not show up as scheduling pressure -- it shows up as OOM kills.
+20GB against a ~17.5GB steady state is the margin; do not lower it without
+re-measuring `kubectl top nodes` first.
+
+Prompted by wanting to free ~30GB for an unrelated experiment on VM 103
+without shutting a worker down. Shutting one down was the original plan and
+is much worse: with Ceph at `failureDomain: host` over exactly 3 workers,
+losing a node means zero redundancy for the entire duration and no ability
+to self-heal (nowhere to place the third replica).
+
+Two traps found applying this, both worth knowing before the next change to
+these resources:
+
+- **Terraform state had drifted badly from reality.** The code said workers
+  were 12288MB/6 cores and masters 4096MB/2; live they were 27648/20 and
+  6144/6 -- hand-resized with `qm set` at some point and never reflected
+  back. A plain `terraform apply` would have *shrunk* every worker below
+  its working set. The defaults in `variables.tf` are now reconciled to the
+  live values; keep them that way, or move them into `terraform.tfvars`.
+- **The provider reboots the VM** to attach the balloon device; this is not
+  a live change. Terraform's default parallelism would have rebooted all
+  three workers simultaneously and taken Ceph below `min_size`. Roll these
+  one at a time (`-target`, `-parallelism=1`) with health gates between --
+  see `docs/runbook.md`, "Draining a worker: CNPG and Ceph prerequisites".
+
+Not verified: behaviour under actual host memory pressure. The balloon has
+been enabled and the guests report stats correctly (`qm monitor <id>` ->
+`info balloon` shows guest-supplied `total_mem`/`free_mem`, which only
+appears when the driver is live -- `CONFIG_VIRTIO_BALLOON=y`, built in, so
+it never shows in `lsmod`), but the host has not yet been squeezed hard
+enough to force real reclamation down toward the floor. The failure mode to
+watch for if it is: kubelet evicting or OOM-killing pods on a node whose
+MemTotal it still believes is 27GB.
+
+## Porting dev-era app manifests: re-derive the resource block, don't copy it (2026-08-09)
+
+Stood up a new Minecraft server (Homestead, MC 1.20.1/Fabric) by copying the
+old k3s `atm10` manifest out of git history (`flux`, `91cbad1^`) and editing
+it. Four of its fields could not survive the move, and only one of them
+fails loudly -- worth knowing before the remaining migrations
+(`external_dns`, `headlamp`, `nfs-driver`, `traefik`) get the same treatment.
+
+The dev server was a single VM with 220 vCPUs and ~94GB RAM, so `atm10` asked
+for `cpu: 64` / `memory: 64Gi` limits and a 12G->64G heap. k8s-homelab
+workers are 20 cores and ~12-15Gi *allocatable* (see "VM memory: ballooning
+with a floor"), so that block is not merely oversized, it is unschedulable --
+the pod sits Pending with no obvious cause if you don't think to compare
+against node capacity. Re-derived as `cpu: 2/8`, `memory: 6Gi/10Gi`, 4G->8G
+heap.
+
+The three quiet ones:
+
+- **Storage class.** `nfs-rwx-ephemeral` doesn't exist here; the cluster is
+  Rook Ceph with `ceph-block` (default, RWO) and `ceph-filesystem` (RWX). For
+  a single-writer workload RWO on `ceph-block` is the better fit anyway, but
+  it forces `strategy: Recreate` -- a RollingUpdate deadlocks because the new
+  pod can't attach a volume the old one still holds.
+- **GC flags.** `atm10` pinned `ActiveProcessorCount=64` plus explicit
+  `ParallelGCThreads`/`ConcGCThreads` sized for the old host. Carried over
+  verbatim the JVM would build GC pools for cores the cgroup won't grant.
+  Keep `ActiveProcessorCount` pinned to the CPU *limit* and let Aikar's flags
+  derive the rest; drop the explicit thread counts rather than rescaling them.
+- **Secret source.** dev used plain Secrets committed alongside the manifest
+  (`serverk8sdeploywithk3s/curseforge-secret.yaml` still has a live
+  CurseForge API key in git -- rotate). Here it's Vault + ESO, so the key
+  moved to `secret/minecraft/curseforge` and the manifest gets an
+  `ExternalSecret` against `vault-backend`.
+
+Also dropped the `external-dns.alpha.kubernetes.io/hostname` annotation.
+external-dns *does* run here with `--source=service`, so unlike a genuinely
+absent controller the annotation would have taken effect -- and published a
+private MetalLB IP into public Cloudflare DNS. External players reach the
+server through the UDM port forward (`WAN:25566 -> 10.4.0.202:25565`,
+`UnifiTerraform/port_forwards.tf`), never that record. No other LoadBalancer
+on this cluster is annotated either.
+
+One benign-looking failure that is genuinely benign: Fabric logs an
+`EntrypointException` / `ClassNotFoundException` for client-only mod compat
+entrypoints (`fallingtrees` -> Jade). It is caught and logged, not fatal --
+the server reached `Done (11.863s)!` with 494 mods while that stack trace was
+still on screen. Don't diagnose it as a crash.
+
+Not verified: external reachability from off-network. The Minecraft
+server-list ping succeeds through `jacobbanghart.com:25566`, but that test
+ran from inside the LAN and so traversed hairpin NAT. It proves the DNAT rule
+applies; it does not rule out an ISP-side block on 25566.

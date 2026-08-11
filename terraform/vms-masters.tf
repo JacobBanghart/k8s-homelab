@@ -17,6 +17,7 @@ resource "proxmox_virtual_environment_vm" "master" {
 
   memory {
     dedicated = each.value.memory
+    floating  = each.value.memory_min
   }
 
   agent {
