@@ -1,0 +1,42 @@
+.:53 {
+    errors
+    health {
+       lameduck 5s
+    }
+    ready
+    kubernetes cluster.local in-addr.arpa ip6.arpa {
+       pods insecure
+       fallthrough in-addr.arpa ip6.arpa
+       ttl 30
+    }
+    # Split-horizon for this cluster's own public hostnames.
+    #
+    # external-dns publishes these at the WAN address so they resolve from
+    # the internet -- that is intentional and stays that way. Public DNS is
+    # untouched by this block; it only changes resolution inside the cluster.
+    #
+    # Why: the UDM Pro hairpins WAN-address traffic for the primary LAN but
+    # NOT for VLAN 30. A pod resolving auth.jacobbanghart.com got the WAN IP
+    # and then timed out connecting to it, which silently broke every
+    # server-side OIDC call -- the browser front-channel redirect worked (the
+    # user's LAN hairpins fine), then the back-channel token exchange from the
+    # app pod hung. Fixed 2026-08-10; see docs/decisions.md.
+    #
+    # Managed by ansible/roles/split_horizon_dns -- edit that role's
+    # defaults/main.yml, not this ConfigMap by hand.
+    hosts {
+{% for host in split_horizon_dns_hostnames %}
+       {{ split_horizon_dns_target }} {{ host }}
+{% endfor %}
+       ttl 30
+       fallthrough
+    }
+    prometheus :9153
+    forward . /etc/resolv.conf {
+       max_concurrent 1000
+    }
+    cache 30
+    loop
+    reload
+    loadbalance
+}

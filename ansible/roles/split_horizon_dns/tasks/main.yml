@@ -1,0 +1,100 @@
+---
+# Makes this cluster's own public hostnames resolve to the Traefik VIP from
+# inside the cluster, while public DNS keeps pointing at the WAN address.
+#
+# Two distinct resolver paths need this, and fixing only the first one looks
+# like it works while leaving kube-apiserver broken:
+#
+#   1. Normal pods            -> CoreDNS          -> the Corefile hosts block
+#   2. hostNetwork static pods -> node's resolver -> /etc/hosts on the masters
+#
+# kube-apiserver is case 2. With hostNetwork: true and no explicit dnsPolicy,
+# kubelet resolves ClusterFirst as Default, so the apiserver never consults
+# CoreDNS and its --oidc-issuer-url stayed unreachable even after the CoreDNS
+# fix landed. Confirmed empirically on 2026-08-10 with probe pods.
+
+- name: Render the CoreDNS Corefile with the split-horizon hosts block
+  ansible.builtin.template:
+    src: Corefile.j2
+    dest: /tmp/Corefile.split-horizon
+    mode: "0644"
+  run_once: true
+  delegate_to: "{{ groups['control_plane_init'][0] }}"
+  register: corefile_rendered
+
+- name: Apply the Corefile to the coredns ConfigMap
+  ansible.builtin.shell:
+    cmd: >-
+      kubectl create configmap coredns -n kube-system
+      --from-file=Corefile=/tmp/Corefile.split-horizon
+      --dry-run=client -o yaml
+      | kubectl apply --kubeconfig /etc/kubernetes/admin.conf -f -
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  run_once: true
+  delegate_to: "{{ groups['control_plane_init'][0] }}"
+  register: coredns_applied
+  changed_when: "'configured' in coredns_applied.stdout"
+
+# CoreDNS has the `reload` plugin, which picks the Corefile up within ~30s on
+# its own. Restart anyway so a playbook run ends in a known-good state rather
+# than one that converges some seconds later.
+- name: Restart CoreDNS if the Corefile changed
+  ansible.builtin.command:
+    cmd: kubectl rollout restart deploy/coredns -n kube-system --kubeconfig /etc/kubernetes/admin.conf
+  when: coredns_applied.changed
+  run_once: true
+  delegate_to: "{{ groups['control_plane_init'][0] }}"
+  changed_when: true
+
+- name: Wait for the CoreDNS rollout to finish
+  ansible.builtin.command:
+    cmd: >-
+      kubectl rollout status deploy/coredns -n kube-system
+      --kubeconfig /etc/kubernetes/admin.conf --timeout=120s
+  when: coredns_applied.changed
+  run_once: true
+  delegate_to: "{{ groups['control_plane_init'][0] }}"
+  changed_when: false
+
+# --- Path 2: the masters' own resolver, for kube-apiserver ---
+
+- name: Pin the OIDC issuer to the Traefik VIP in the masters' /etc/hosts
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: '\s{{ item | regex_escape }}\s*$'
+    line: "{{ split_horizon_dns_target }} {{ item }}"
+    state: present
+  become: true
+  loop: "{{ split_horizon_dns_node_hostnames }}"
+  when: inventory_hostname in groups['masters']
+  register: node_hosts_patched
+
+# kube-apiserver caches the result of its OIDC discovery call, so a failed
+# discovery does not recover on its own once /etc/hosts is fixed. Restart it
+# serially -- `serial: 1` on the play keeps the other two masters serving.
+- name: Restart kube-apiserver to redo OIDC discovery
+  ansible.builtin.command:
+    cmd: >-
+      kubectl delete pod kube-apiserver-{{ inventory_hostname }} -n kube-system
+      --kubeconfig /etc/kubernetes/admin.conf
+  when:
+    - node_hosts_patched.changed
+    - inventory_hostname in groups['masters']
+  changed_when: true
+  failed_when: false
+
+- name: Wait for kube-apiserver to be Ready again on this master
+  ansible.builtin.command:
+    cmd: >-
+      kubectl get pod kube-apiserver-{{ inventory_hostname }} -n kube-system
+      --kubeconfig /etc/kubernetes/admin.conf
+      -o jsonpath={.status.containerStatuses[0].ready}
+  register: split_horizon_apiserver_ready
+  until: split_horizon_apiserver_ready.stdout == "true"
+  retries: 30
+  delay: 5
+  when:
+    - node_hosts_patched.changed
+    - inventory_hostname in groups['masters']
+  changed_when: false

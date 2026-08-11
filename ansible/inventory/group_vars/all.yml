@@ -25,3 +25,12 @@ control_plane_vip_auth_pass: "k8shomelab-vrrp"
 # playbook.yml` run will point your kube-apiserver at an issuer you don't
 # control (which can crash-loop it if unreachable).
 oidc_enabled: true
+
+# PERSONALIZE: gates the split_horizon_dns role, whose defaults/main.yml
+# lists this deployment's own public hostnames and Traefik VIP. Defaults to
+# true for this deployment's own re-runs; set it to `false` in your own
+# inventory override until you've replaced that hostname list with yours,
+# otherwise CoreDNS will answer for names you don't serve at an address you
+# don't own. Only affects resolution inside the cluster -- public DNS
+# records (published by external-dns at the WAN address) are untouched.
+split_horizon_dns_enabled: true

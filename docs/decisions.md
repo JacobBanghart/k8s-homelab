@@ -1247,3 +1247,61 @@ Not verified: external reachability from off-network. The Minecraft
 server-list ping succeeds through `jacobbanghart.com:25566`, but that test
 ran from inside the LAN and so traversed hairpin NAT. It proves the DNAT rule
 applies; it does not rule out an ISP-side block on 25566.
+
+## Split-horizon DNS: public hostnames must resolve to the VIP inside the cluster
+
+**2026-08-10.** After the `flux` repo gave every app IngressRoute an explicit
+`external-dns.alpha.kubernetes.io/target: 68.170.78.3`, every OIDC login
+started failing while Authentik itself stayed perfectly healthy -- 200 on its
+discovery document, valid Let's Encrypt cert, pods Ready. Its logs showed
+nothing but health probes: no real traffic was arriving at all.
+
+The target annotation was correct and stays. Publishing the Traefik MetalLB
+VIP (`10.4.0.200`, RFC1918) into public DNS is what the annotation fixed --
+before it, the sites resolved on the LAN and were dead to the internet.
+
+What it also did was make the *cluster* resolve its own hostnames to the WAN
+address, because CoreDNS just forwards upstream and had no split-horizon
+entry. **The UDM Pro hairpins WAN-address traffic for the primary LAN but not
+for VLAN 30.** So a pod resolving `auth.jacobbanghart.com` got `68.170.78.3`
+and then timed out connecting to it.
+
+That produces a genuinely confusing symptom: the browser front-channel
+redirect works, because the user's laptop is on the primary LAN and hairpins
+fine. You log in, get bounced back, and *then* the app pod's back-channel
+token exchange hangs. The provider is healthy, the network is "up", and the
+login still fails.
+
+Verified empirically, before and after, with probe pods:
+
+```
+# before
+curl https://auth.../.well-known/openid-configuration        -> timeout (12s)
+curl --resolve auth...:443:10.4.0.200 (same URL)             -> 200
+```
+
+**Two resolver paths need fixing, and fixing only the first looks like it
+worked.** Normal pods use CoreDNS; hostNetwork static pods use the *node's*
+resolver. `kube-apiserver` is the latter -- with `hostNetwork: true` and no
+explicit `dnsPolicy`, kubelet resolves `ClusterFirst` as `Default`, so the
+apiserver never consults CoreDNS. After the CoreDNS block landed, a probe
+pod with `dnsPolicy: ClusterFirstWithHostNet` returned 200 and looked like
+proof; a probe with `dnsPolicy: Default` -- what the apiserver actually does
+-- still timed out. The masters needed an `/etc/hosts` entry too.
+
+kube-apiserver also **caches its OIDC discovery result**, so it does not
+recover on its own once DNS is fixed; it has to be restarted (serially).
+
+Both halves are codified in `ansible/roles/split_horizon_dns`, gated behind
+`split_horizon_dns_enabled`. Add a hostname to that role's
+`defaults/main.yml` -- not to the ConfigMap by hand -- when a new public
+hostname is served by this cluster and called server-side from inside it.
+
+Public DNS is untouched by any of this: off-network access (the point of the
+WAN target in the first place) keeps working through `68.170.78.3`. Verified
+after the change -- public records still resolve to the WAN IP, and the apps
+still answer over that path.
+
+The broader alternative, not taken: enable NAT reflection for VLAN 30 on the
+UDM Pro, which would fix every in-cluster call to a public hostname at once
+rather than per-name. Worth revisiting if this hostname list gets unwieldy.

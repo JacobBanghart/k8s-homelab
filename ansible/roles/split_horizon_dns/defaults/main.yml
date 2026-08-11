@@ -1,0 +1,41 @@
+---
+# PERSONALIZE: this deployment's own public hostnames and Traefik VIP.
+# A fork should replace these with its own (or set split_horizon_dns_enabled:
+# false in group_vars/all.yml) -- publishing another deployment's hostnames
+# into your CoreDNS just blackholes them at an address you don't own.
+
+# The in-cluster address these public hostnames should resolve to: the
+# Traefik MetalLB VIP. Public DNS keeps pointing at the WAN address; this
+# only changes resolution from inside the cluster.
+split_horizon_dns_target: "10.4.0.200"
+
+# Every public hostname this cluster serves. Add a hostname here when it is
+# served by this cluster AND called server-side from inside it (OIDC
+# back-channel, webhooks, service-to-service). Purely browser-facing
+# hostnames are harmless to include and cheaper than debugging the omission.
+split_horizon_dns_hostnames:
+  - auth.jacobbanghart.com
+  - dashboard.jacobbanghart.com
+  - excalidraw.jacobbanghart.com
+  - files.jacobbanghart.com
+  - home.jacobbanghart.com
+  - invoice-ninja.jacobbanghart.com
+  - jellyfin.jacobbanghart.com
+  - labels.jacobbanghart.com
+  - mealie.jacobbanghart.com
+  - nextcloud.jacobbanghart.com
+  - passwords.jacobbanghart.com
+  - photos.jacobbanghart.com
+  - speedtest.jacobbanghart.com
+  - headlamp.k8s-homelab.jacobbanghart.com
+  - vault.k8s-homelab.jacobbanghart.com
+  - grafana.k8s-homelab.jacobbanghart.com
+  - jacobbanghart.com
+  - www.jacobbanghart.com
+
+# Hostnames that must additionally resolve from the *node's* resolver, not
+# just CoreDNS. kube-apiserver is a static pod on hostNetwork and does NOT
+# use CoreDNS, so its --oidc-issuer-url has to be fixed in /etc/hosts on the
+# masters. Keep this in sync with control_plane_oidc's issuer URL.
+split_horizon_dns_node_hostnames:
+  - auth.jacobbanghart.com

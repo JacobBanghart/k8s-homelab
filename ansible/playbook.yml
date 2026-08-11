@@ -81,6 +81,22 @@
     # those values with their own OIDC provider's.
     - { role: control_plane_oidc, when: oidc_enabled }
 
+- name: Split-horizon DNS for this cluster's own public hostnames
+  hosts: masters
+  become: true
+  # One master at a time -- this role restarts kube-apiserver to redo its
+  # cached OIDC discovery, and its wait-for-Ready check catches a master
+  # that does not come back before the next one is touched.
+  serial: 1
+  tags: [split-horizon-dns]
+  roles:
+    # Must run after control-plane-oidc: that role sets the apiserver's
+    # --oidc-issuer-url, and this one makes that URL actually resolvable
+    # from inside the cluster and from the masters themselves.
+    # Gated by split_horizon_dns_enabled (group_vars/all.yml) since the
+    # hostnames in defaults/main.yml are this deployment's own.
+    - { role: split_horizon_dns, when: split_horizon_dns_enabled }
+
 - name: Security-only automatic OS patching across the whole cluster
   hosts: k8s_cluster
   become: true
