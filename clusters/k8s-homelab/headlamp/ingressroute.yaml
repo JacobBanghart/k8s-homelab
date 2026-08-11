@@ -12,9 +12,12 @@
 # Missed carrying this over during the initial Wave 0 migration, which
 # only added the new headlamp.k8s-homelab.jacobbanghart.com name; broke
 # dashboard.jacobbanghart.com until this fix. Split into two IngressRoute
-# objects (the exclude annotation is resource-scoped, not per-Host-rule)
-# so external-dns can actively manage dashboard.jacobbanghart.com like
-# any other public app, while headlamp.k8s-homelab... stays Pi-hole-only.
+# objects (the annotation is resource-scoped, not per-Host-rule) so
+# external-dns can actively manage dashboard.jacobbanghart.com like any
+# other public app, while headlamp.k8s-homelab... stays Pi-hole-only.
+#
+# dashboard.jacobbanghart.com is public by explicit decision (2026-08-11);
+# see the accepted-exposure note on the headlamp-public route below.
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
 metadata:
@@ -44,20 +47,35 @@ metadata:
   name: headlamp-public
   namespace: headlamp
   annotations:
-    # No public DNS for a Kubernetes UI. The route stays so the host is
-    # reachable in-cluster and by IP + Host header, but the name is not
-    # published -- same stance as vault and headlamp-internal.
+    # DELIBERATELY PUBLIC as of 2026-08-11, by explicit decision, after
+    # being shown the tradeoff below and choosing it knowingly.
     #
-    # This was publicly resolvable until 2026-08-10 through a leftover
-    # dashboard.jacobbanghart.com record from the dead k3s cluster (TXT owner
-    # "external-dns", resource ingress/kubernetes-dashboard). external-dns did
-    # not own it, so nothing here managed or removed it. That record has been
-    # deleted; this annotation stops it coming back.
-    # external-dns has no "exclude" annotation -- that key is silently
-    # ignored, which is why it never kept anything unpublished. The real
-    # opt-out is the controller key: any value other than "dns-controller"
-    # makes every source skip the object.
-    external-dns.alpha.kubernetes.io/controller: "none"
+    # This reverses 09b877d ("headlamp: never publish
+    # dashboard.jacobbanghart.com", 2026-08-10), which closed the name after
+    # finding it had been exposed accidentally via a leftover record from
+    # the dead k3s cluster. That was an accident; this is a choice.
+    #
+    # KNOWN EXPOSURE, accepted: this is a Kubernetes UI, and rbac.yaml binds
+    # oidc:jacobmbanghart@gmail.com to cluster-admin. The identity behind it
+    # is Authentik's `akadmin`, which is also Authentik's own superuser and
+    # has no MFA device enrolled. So a single Authentik password is the only
+    # control between the internet and cluster-admin plus IdP admin.
+    # Rejected compensating controls, on the reasoning that admin.conf and
+    # the client certs remain available as an unexposed admin path:
+    #   - downgrading this binding to `view` (rbac.yaml)
+    #   - an MFA-gated authorization flow on the Headlamp Authentik app
+    #   - a Traefik IPAllowList middleware
+    # Revisit any of them if this account ever stops being single-user.
+    #
+    # Note that withdrawing the DNS record was never the thing protecting
+    # this: Traefik routes by SNI on the WAN address, so the host answered
+    # from the internet to anyone who knew the name even while unpublished.
+    # Publishing changes discoverability, not reachability.
+    #
+    # An IngressRoute carries no LoadBalancer status, so external-dns has no
+    # address to derive a target from and drops the hostname before
+    # --default-targets is consulted. The target must be stated explicitly.
+    external-dns.alpha.kubernetes.io/target: "68.170.78.3"
 spec:
   entryPoints:
     - websecure
