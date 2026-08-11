@@ -178,7 +178,15 @@ spec:
           token_url: https://auth.jacobbanghart.com/application/o/token/
           api_url: https://auth.jacobbanghart.com/application/o/userinfo/
           redirect_uri: https://grafana.k8s-homelab.jacobbanghart.com/login/generic_oauth
-          allow_sign_up: true
+          # false because this Grafana is reachable from the public
+          # internet (see the ingress block below -- that is deliberate).
+          # With sign-up on, anyone who could obtain an Authentik account
+          # got a Grafana account automatically on first login; now an
+          # account has to already exist here. Existing users are
+          # unaffected -- jacob's (id=2) and the local admin (id=1) both
+          # predate this change. To onboard someone new, create their
+          # Grafana user first, then have them log in through Authentik.
+          allow_sign_up: false
           # No role_attribute_path meant every Authentik login (including
           # jacob's own account) got Grafana's default org role, Viewer --
           # which can't use Explore. Pin jacob's account to Admin by email;
@@ -195,10 +203,26 @@ spec:
       ingress:
         enabled: true
         ingressClassName: traefik
-        # Internal admin tool, resolved via Pi-hole only -- keep it off
-        # external-dns's public Cloudflare records.
-        annotations:
-          external-dns.alpha.kubernetes.io/exclude: "true"
+        # DELIBERATELY PUBLIC. Published to Cloudflare at the WAN address
+        # so it's reachable off-network, and protected by Authentik OIDC
+        # with allow_sign_up: false (above) rather than by network
+        # position.
+        #
+        # This block used to carry
+        # `external-dns.alpha.kubernetes.io/exclude: "true"` under a
+        # comment claiming grafana was "internal, resolved via Pi-hole
+        # only". That annotation does not exist -- external-dns accepts
+        # the key and silently ignores it -- so grafana was published the
+        # whole time while the config asserted the opposite. Decided on
+        # 2026-08-10 to keep it public and fix the auth instead; the
+        # comment is corrected here so the next reader isn't misled.
+        #
+        # The real opt-out, if this ever should go private, is
+        # `external-dns.alpha.kubernetes.io/controller: "none"` (what
+        # vault/ and headlamp/ use). Note that withdrawing the DNS record
+        # does NOT block access: Traefik still routes to it by SNI on the
+        # WAN address, so genuinely restricting it needs an IPAllowList
+        # middleware or a separate internal entrypoint.
         hosts:
           - grafana.k8s-homelab.jacobbanghart.com
         # secretName matches certificate.yaml's cert-manager Certificate
