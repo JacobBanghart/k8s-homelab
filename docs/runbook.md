@@ -295,6 +295,51 @@ Two further traps found the same day:
   re-read (disk flags, memory, balloon) needs a full
   `status/shutdown` then `status/start`.
 
+### Staging VM config changes as Proxmox "pending" (2026-08-15)
+
+A memory change can be parked on a running VM and picked up whenever it next
+restarts, instead of forcing a reboot at the moment you edit it:
+
+```bash
+qm set 9111 --memory 24576 --balloon 16384
+qm config 9111                      # still shows the OLD live value
+pvesh get /nodes/prox/qemu/9111/pending --output-format json
+# -> {"key":"memory","value":"15360","pending":"24576"}
+```
+
+`memory` lands in `pending`; `balloon` applies immediately. Setting a balloon
+floor *above* the guest's current boot ceiling is harmless -- the balloon
+simply cannot reclaim anything, so the guest keeps all its RAM -- and it
+becomes a real floor once the guest boots at the larger size. Verify with
+`qm monitor <id> <<< "info balloon"`: `actual` and `max_mem` should both still
+read the old value.
+
+**A guest-side `reboot` does NOT apply pending changes.** Same QEMU process,
+same trap as `status/reset` above. It needs `qm reboot <id>` (which is a
+managed shutdown+start) or an explicit `qm stop` / `qm start`. `terraform
+apply` also applies them, because the provider restarts the VM on a memory
+change.
+
+**Keep Terraform in step.** If the live config is ahead of the code, the next
+`terraform apply` reverts it *and* reboots to do so. Either update the
+Terraform default in the same sitting, or do not stage the change at all.
+
+### The drain constraint is about capacity, not just PDBs (2026-08-15)
+
+Separately from the OSD PDB deadlock above, a drain can fail simply because
+the pods do not fit anywhere else. Check before planning any rolling work:
+
+```bash
+kubectl describe nodes | grep -A6 "Allocated resources"
+```
+
+On 2026-08-15 worker-0 and worker-2 were both at **99% of allocatable memory
+requests** (30.2GiB of requests cluster-wide against ~35.7GiB allocatable), so
+evacuating any one worker had nowhere to land. Note this is *requests*, not
+usage -- `kubectl top` looked fine at 63-82%. Guest allocatable is only ~77% of
+the VM's RAM, so size for the drain case: two nodes must hold all three nodes'
+requests.
+
 ### Marking the OSD disks as SSD (done 2026-08-09)
 
 All OSD disks live on the `nvme` datastore but were exposed with `ssd=0`, so
