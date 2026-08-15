@@ -84,19 +84,29 @@ variable "workers" {
     ip     = string
     vm_id  = number
     cores = optional(number, 20)
-    # 15GiB, down from 27GiB (2026-08-09). Measured steady state after a clean
-    # reboot is 6.6-9.3GiB per worker, against 25.8GiB of pod requests across
-    # the whole cluster -- so 3x15GiB leaves it ~56% committed and still
-    # absorbs a full node drain onto the remaining two. The old 27GiB was sized
-    # off a `kubectl top` reading inflated by weeks of accumulated guest page
-    # cache, not by anything the workloads actually needed.
-    memory = optional(number, 15360)
+    # 24GiB, up from 15GiB (2026-08-15). 15GiB was set on 2026-08-09 against
+    # 25.8GiB of cluster-wide pod requests, which left room to evacuate a node.
+    # Requests have since grown to 30.2GiB (11796/7418/11744 Mi per worker),
+    # putting two workers at 99% of allocatable. Sizing here is driven by the
+    # drain constraint, not by steady-state usage: evacuating one worker must
+    # fit on the other two. At 24GiB the guest yields ~19.1GiB allocatable, so
+    # two nodes hold 38.2GiB against 30.2GiB of requests. At 15GiB they held
+    # 23.8GiB and a drain could not fit at all -- the cluster could not roll.
+    #
+    # Do NOT read this as a return to the pre-2026-08-09 27GiB. That number was
+    # derived from a `kubectl top` reading inflated by accumulated guest page
+    # cache; this one is derived from scheduler requests. Re-check it the same
+    # way (`kubectl describe nodes | grep -A5 "Allocated resources"`) before
+    # changing it, and remember allocatable is only ~77% of guest RAM.
+    memory = optional(number, 24576)
     # See the note on masters.memory_min. Do NOT read this as
     # reclaimable-on-demand: ballooning a guest that has already filled its page
     # cache returns memory slowly and unreliably, and not at all fast enough for
     # a VFIO pin. Booting the guest smaller is what actually gives RAM back to
     # the host; this floor only bounds how far it can be squeezed afterwards.
-    memory_min = optional(number, 12288)
+    # Raised 12288 -> 16384 with the memory bump so the floor still sits above
+    # observed steady-state usage (7.5-9.8GiB) with margin.
+    memory_min = optional(number, 16384)
   }))
   default = {
     k8s-worker-0 = { ip = "10.4.0.20", vm_id = 9111 }
