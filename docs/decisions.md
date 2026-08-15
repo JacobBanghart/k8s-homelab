@@ -1354,3 +1354,36 @@ testing a bare clone.
 Residual: cloud-init reports `degraded` over a DEPRECATED notice for `user`
 as a string. That comes from Proxmox's own generated user-data, not from this
 image. Harmless, but cloud-init plans removal in 27.2.
+
+### Do not repoint `template_vm_id` to roll nodes onto a new image
+
+`clone.vm_id` is ForceNew in the bpg provider, and `template_vm_id` is a single
+variable shared by every master and worker. Changing 9000 -> 9001 and running
+`terraform plan` produces:
+
+```
+Plan: 6 to add, 0 to change, 6 to destroy.
+```
+
+All six nodes at once, **including the workers' Ceph OSD disks**. That is total
+cluster loss from a one-line edit, and `apply` would not pause to ask. The
+variable is deliberately left at 9000 for this reason; the new image lives at
+9001 and must be selected per-node, never fleet-wide.
+
+A real one-node OS upgrade is therefore not a `terraform apply`. It is:
+
+1. Drain the node's *Ceph* role first -- `ceph osd out` the two OSDs on it,
+   wait for rebalance to `HEALTH_OK` with all PGs `active+clean`, then purge
+   them. The VM's OSD disk does not survive the replace, so the data must
+   already be elsewhere before the VM is touched.
+2. Remove the node from Kubernetes (`kubectl drain`, `kubeadm reset` on the
+   node, `kubectl delete node`) -- and note the capacity constraint in
+   docs/runbook.md: the drain must actually fit on the remaining nodes.
+3. Replace only that VM, targeted, with the new template -- a per-node template
+   override plus
+   `terraform apply -replace='proxmox_virtual_environment_vm.worker["k8s-worker-0"]'`.
+   Confirm the plan shows exactly one resource replaced before applying.
+4. Rejoin the node, let Rook provision fresh OSDs, wait for `HEALTH_OK`.
+
+Only then move to the next node. Ceph is `size 3, min_size 2` across exactly
+three hosts, so at no point may two workers be absent.
