@@ -78,7 +78,7 @@ variable "masters" {
   }))
   default = {
     k8s-master-0 = { ip = "10.4.0.10", vm_id = 9101 }
-    k8s-master-1 = { ip = "10.4.0.11", vm_id = 9102 }
+    k8s-master-1 = { ip = "10.4.0.11", vm_id = 9102, template_vm_id = 9001 }
     k8s-master-2 = { ip = "10.4.0.12", vm_id = 9103, template_vm_id = 9001 }
   }
 }
