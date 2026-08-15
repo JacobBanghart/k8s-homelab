@@ -1387,3 +1387,48 @@ A real one-node OS upgrade is therefore not a `terraform apply`. It is:
 
 Only then move to the next node. Ceph is `size 3, min_size 2` across exactly
 three hosts, so at no point may two workers be absent.
+
+### Rebuilding a worker: OSD disks survive, and wiping them needs the whole device (2026-08-15)
+
+Two things learned rebuilding k8s-worker-1 onto the 26.04 image, both of which
+cost hours.
+
+**1. The OSD disks survive a Terraform VM replace.** After `terraform apply
+-replace` destroyed and recreated the VM, the new guest's scsi1/scsi2 still
+carried the previous BlueStore data -- same OSD IDs, same UUIDs. Only the root
+disk (scsi0) came from the golden image.
+
+This means purging the OSDs before a rebuild is probably unnecessary. If the
+OSDs re-adopt, the rebuild costs no backfill and no degraded window at all.
+Try that first on the next worker; fall back to purge-and-backfill only if
+they do not come up. Purging first, as was done here, throws away the third
+replica for no reason and puts the cluster at 2 copies for the whole rebuild.
+
+**2. Wiping an OSD disk means the WHOLE device.** Ceph 19/20 (Squid/Tentacle)
+writes redundant bdev labels at offsets 0, 1GiB, 10GiB, 100GiB and 1TiB, not
+just at the start. Zeroing the first few hundred MB leaves the deeper copies
+intact, and they still carry the old OSD UUIDs. The symptom is baffling:
+
+    lsblk                -> FSTYPE="" (disk looks blank)
+    rook osd-prepare     -> "2 ceph-volume raw osd devices configured"
+                            with the ORIGINAL UUIDs
+    osd pod expand-bluefs -> _check_main_bdev_label not all labels read
+                             properly, 3!=2  -> ceph_assert(r == 0), abort
+
+Rook then loops: it recreates the OSD deployments, whose activate step rewrites
+/var/lib/rook/rook-ceph/<fsid>_<uuid>, which the next prepare job reads back.
+Deleting those dirs, restarting the operator, and rebooting the node all fail
+to break it, because the real state is on the disk the whole time.
+
+`blkdiscard -f` reported success on these virtual disks while changing nothing.
+Verify explicitly rather than trusting it:
+
+```bash
+for off in 0 1073741824 10737418240 107374182400; do
+  dd if=/dev/sdX bs=4096 count=1 skip=$((off/4096)) status=none | tr -d '\0' | wc -c
+done   # every one must print 0
+```
+
+Read the OSD pod's `expand-bluefs` init container log early. The assertion names
+the problem directly; the pod state (`Init:CrashLoopBackOff`) and the prepare
+job log both point somewhere misleading.
