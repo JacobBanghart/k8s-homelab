@@ -1,5 +1,12 @@
 ---
-control_plane_endpoint: "10.4.0.10:6443"
+# The keepalived VIP, not any single master's IP. This feeds
+# kubeadm --control-plane-endpoint and Cilium's k8sServiceHost, so pointing it
+# at a real node silently pins the whole cluster to that node: every
+# kubelet.conf, kube-proxy kubeconfig and Cilium agent then talks to it
+# directly and the VIP does nothing. Losing that one master takes every node
+# NotReady despite the other two apiservers being healthy. 10.4.0.5 is in the
+# apiserver certSANs, so it is valid to address directly.
+control_plane_endpoint: "10.4.0.5:6443"
 pod_network_cidr: "10.42.0.0/16"
 cilium_version: "1.16.5"
 
