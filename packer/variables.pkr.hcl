@@ -35,9 +35,9 @@ variable "kubernetes_version" {
 }
 
 variable "ubuntu_point_release" {
-  description = "Exact Ubuntu live-server point release to build from, e.g. 24.04.4. Must exist at https://releases.ubuntu.com/<major>/ -- bump this (not the scripts) to move to a newer point release or LTS."
+  description = "Exact Ubuntu live-server release to build from, e.g. 26.04 or 24.04.4. Must exist at https://releases.ubuntu.com/<major>/ -- bump this (not the scripts) to move to a newer point release or LTS. Initial LTS releases have no point suffix (26.04, not 26.04.0); releases.ubuntu.com serves only the newest point release of a series, so an older pin will 404 once superseded."
   type        = string
-  default     = "24.04.4"
+  default     = "26.04"
 }
 
 variable "ssh_username" {

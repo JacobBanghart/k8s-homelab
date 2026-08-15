@@ -62,9 +62,13 @@ source "proxmox-iso" "k8s_golden" {
   # Drop into the GRUB command-line shell ('c') and issue linux/initrd/boot
   # directly, rather than blindly editing the existing menu entry (whose
   # line layout in the edit box isn't reliably navigable by down-presses).
+  #
+  # `ds=nocloud` (not `nocloud-net`): cloud-init deprecated the -net alias in
+  # 24.1 and the unified nocloud datasource handles an http `s=` seed itself.
+  # 26.04 ships cloud-init well past that deprecation.
   boot_command = [
     "<wait5>c<wait>",
-    "linux /casper/vmlinuz quiet autoinstall ds=nocloud-net\\;s=http://{{ .HTTPIP }}:{{ .HTTPPort }}/ ---<enter><wait>",
+    "linux /casper/vmlinuz quiet autoinstall ds=nocloud\\;s=http://{{ .HTTPIP }}:{{ .HTTPPort }}/ ---<enter><wait>",
     "initrd /casper/initrd<enter><wait>",
     "boot<enter>"
   ]
