@@ -70,11 +70,16 @@ variable "masters" {
     # startup and does not learn about balloon inflation, so a floor set below
     # actual usage shows up as OOM kills rather than as scheduling pressure.
     memory_min = optional(number, 4096)
+    # Per-node golden-image override; null means use var.template_vm_id.
+    # Set this on ONE node to rebuild it onto a new image, then clear it once
+    # the fleet has caught up. Never bump var.template_vm_id itself -- it is
+    # shared, and clone.vm_id is ForceNew, so it replaces all six nodes.
+    template_vm_id = optional(number, null)
   }))
   default = {
     k8s-master-0 = { ip = "10.4.0.10", vm_id = 9101 }
     k8s-master-1 = { ip = "10.4.0.11", vm_id = 9102 }
-    k8s-master-2 = { ip = "10.4.0.12", vm_id = 9103 }
+    k8s-master-2 = { ip = "10.4.0.12", vm_id = 9103, template_vm_id = 9001 }
   }
 }
 
@@ -107,6 +112,11 @@ variable "workers" {
     # Raised 12288 -> 16384 with the memory bump so the floor still sits above
     # observed steady-state usage (7.5-9.8GiB) with margin.
     memory_min = optional(number, 16384)
+    # Per-node golden-image override; null means use var.template_vm_id.
+    # Set this on ONE node to rebuild it onto a new image, then clear it once
+    # the fleet has caught up. Never bump var.template_vm_id itself -- it is
+    # shared, and clone.vm_id is ForceNew, so it replaces all six nodes.
+    template_vm_id = optional(number, null)
   }))
   default = {
     k8s-worker-0 = { ip = "10.4.0.20", vm_id = 9111 }

@@ -6,7 +6,13 @@ resource "proxmox_virtual_environment_vm" "master" {
   vm_id     = each.value.vm_id
 
   clone {
-    vm_id = var.template_vm_id
+    # Per-node override so a single node can be rebuilt onto a new golden
+    # image. clone.vm_id is ForceNew and var.template_vm_id is shared by every
+    # master and worker, so bumping that variable plans "6 to add, 6 to
+    # destroy" -- the whole cluster, Ceph OSD disks included. Set
+    # template_vm_id on one entry in var.masters instead, and confirm the plan
+    # replaces exactly one resource before applying. See docs/decisions.md.
+    vm_id = coalesce(each.value.template_vm_id, var.template_vm_id)
     full  = true
   }
 

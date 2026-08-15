@@ -6,7 +6,11 @@ resource "proxmox_virtual_environment_vm" "worker" {
   vm_id     = each.value.vm_id
 
   clone {
-    vm_id = var.template_vm_id
+    # See the note in vms-masters.tf: per-node override, because bumping
+    # var.template_vm_id replaces every node at once. A worker rebuild also
+    # destroys its Ceph OSD disk, so its OSDs must be out and purged, and the
+    # cluster back to HEALTH_OK, before the replace runs.
+    vm_id = coalesce(each.value.template_vm_id, var.template_vm_id)
     full  = true
   }
 
