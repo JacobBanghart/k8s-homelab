@@ -1305,3 +1305,52 @@ still answer over that path.
 The broader alternative, not taken: enable NAT reflection for VLAN 30 on the
 UDM Pro, which would fix every in-cluster call to a public hostname at once
 rather than per-name. Worth revisiting if this hostname list gets unwieldy.
+
+## Golden image moves to Ubuntu 26.04, kept on a second VMID (2026-08-15)
+
+The golden image is now the base for rolling node upgrades one node at a
+time, so it should lead the fleet rather than trail it. Template 9001 is
+Ubuntu 26.04 LTS (resolute), kernel 7.0; template 9000 (22.04) is deliberately
+retained so a bad roll can fall back by flipping `template_vm_id`.
+
+**The committed Packer config had never been run.** Template 9000 was built
+2026-07-09 01:54 on 22.04; the config landed 20 hours later with
+`ubuntu_point_release` defaulting to `24.04.4`, and nothing executed it after
+that. So the repo described an image nobody had produced. Three things had to
+be fixed before it would build at all:
+
+1. `ds=nocloud`, not `ds=nocloud-net` -- cloud-init deprecated the alias in
+   24.1 and 26.04 does not honour it.
+2. `systemctl enable cloud-init.target`, not `cloud-init` -- upstream renamed
+   `cloud-init.service` to `cloud-init-network.service` in 24.3 and 26.04
+   dropped the alias, so the bare name fails and `set -e` killed the script.
+   The target exists on 22.04 too, so this is not release-specific.
+3. `net.ifnames=0 biosdevname=0` via a `/etc/default/grub.d` drop-in -- see
+   below, this one was silent.
+
+**Kubernetes stays pinned at 1.30** (matching the running v1.30.14). Moving
+the OS and Kubernetes together would make a failed node join impossible to
+attribute to either.
+
+**The interface-naming trap.** Proxmox's cloud-init config renames the NIC to
+`eth0` via a netplan `set-name`. On 22.04 that rename succeeds -- which is the
+only reason the existing nodes are `eth0`; there is no `net.ifnames=0` on
+their cmdline. On 26.04 systemd refuses to rename an interface that is already
+up, so it stayed `ens18` and cloud-init finished `degraded`. That would have
+broken keepalived on a master, since `control_plane_vip_interface` is pinned to
+`eth0` -- the same failure already recorded earlier in this document. Naming
+the NIC in the kernel removes the rename step rather than trying to make it
+work.
+
+**Verification method worth repeating: `EXIT=0` proves nothing here.** The
+first build "succeeded" by Packer's own reckoning while producing an image
+whose NIC name would have broken a master. Clone the template to a scratch
+VMID, attach a cloud-init drive (`--ide2 <storage>:cloudinit`) so ds-identify
+finds a datasource, boot it, and inspect through `qm guest exec` -- no SSH or
+network assumptions. Without the cloud-init drive the guest reports
+`disabled-by-generator`, which looks alarming and is purely an artifact of
+testing a bare clone.
+
+Residual: cloud-init reports `degraded` over a DEPRECATED notice for `user`
+as a string. That comes from Proxmox's own generated user-data, not from this
+image. Harmless, but cloud-init plans removal in 27.2.
