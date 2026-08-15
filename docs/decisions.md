@@ -1393,16 +1393,35 @@ three hosts, so at no point may two workers be absent.
 Two things learned rebuilding k8s-worker-1 onto the 26.04 image, both of which
 cost hours.
 
-**1. The OSD disks survive a Terraform VM replace.** After `terraform apply
--replace` destroyed and recreated the VM, the new guest's scsi1/scsi2 still
-carried the previous BlueStore data -- same OSD IDs, same UUIDs. Only the root
-disk (scsi0) came from the golden image.
+**1. OSD disk contents after a Terraform replace are NON-DETERMINISTIC. Never
+assume either way -- always verify.**
 
-This means purging the OSDs before a rebuild is probably unnecessary. If the
-OSDs re-adopt, the rebuild costs no backfill and no degraded window at all.
-Try that first on the next worker; fall back to purge-and-backfill only if
-they do not come up. Purging first, as was done here, throws away the third
-replica for no reason and puts the cluster at 2 copies for the whole rebuild.
+On k8s-worker-1, `terraform apply -replace` destroyed and recreated the VM and
+the new guest's scsi1/scsi2 still carried the previous BlueStore data -- same
+OSD IDs, same UUIDs. That looked like a useful property, and was written up
+here as one.
+
+It is not. k8s-worker-2 was rebuilt the same way a few hours later,
+deliberately without purging its OSDs to exploit the effect, and its disks came
+back completely blank -- every label offset zero. The likely cause is that the
+`nvme` datastore is a *dir* storage: destroying the VM deletes the raw file,
+and whether the newly allocated file reads back as zeros or as the previous
+blocks depends on what the host filesystem hands out. Nothing guarantees it.
+
+So the rebuild procedure must verify rather than assume:
+
+```bash
+for off in 0 1073741824 10737418240 107374182400; do
+  dd if=/dev/sdX bs=4096 count=1 skip=$((off/4096)) status=none | tr -d '\0' | wc -c
+done
+```
+
+All zeros -> the disk is genuinely blank; purge the old OSD IDs and let Rook
+provision fresh ones. This is what happened on worker-2 and it worked on the
+first attempt. Any non-zero -> the old OSD is still there; either let it
+re-adopt (no backfill, no degraded window) or wipe every offset before purging.
+The failure mode to avoid is worker-1's: purging first, then wiping only the
+start of the disk, which leaves deeper labels that fight the new OSD.
 
 **2. Wiping an OSD disk means the WHOLE device.** Ceph 19/20 (Squid/Tentacle)
 writes redundant bdev labels at offsets 0, 1GiB, 10GiB, 100GiB and 1TiB, not
