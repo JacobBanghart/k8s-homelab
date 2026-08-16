@@ -36,6 +36,18 @@ unifi/*.auto.tfvars
 unifi/crash.log
 unifi/crash.*.log
 
+# AWS backup Terraform (terraform-aws-backup/) -- offsite S3 backup target.
+# State holds the restic IAM secret access key. This repo is PUBLIC.
+terraform-aws-backup/.terraform/
+terraform-aws-backup/*.tfstate
+terraform-aws-backup/*.tfstate.*
+terraform-aws-backup/terraform.tfvars
+terraform-aws-backup/*.auto.tfvars
+terraform-aws-backup/crash.log
+terraform-aws-backup/crash.*.log
+terraform-aws-backup/tfplan
+terraform-aws-backup/.restic-env
+
 # AWS KMS Terraform (terraform-aws-kms/) -- Vault auto-unseal key
 terraform-aws-kms/.terraform/
 terraform-aws-kms/*.tfstate

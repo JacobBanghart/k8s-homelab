@@ -1,0 +1,130 @@
+---
+# Nightly offsite backup of every Rook-Ceph RBD volume to S3 via restic.
+#
+# This is the backup that matters: the cluster's application data (Immich,
+# Vaultwarden, Vault, Nextcloud, Home Assistant, the Postgres volumes) exists
+# only in Ceph, on OSDs that all currently share one physical NVMe. No VM
+# images are backed up anywhere -- every node is rebuilt from
+# Packer -> Terraform -> Ansible, and cluster state lives in Flux.
+#
+# Mechanism: snapshot each RBD image, stream it out with `rbd export-diff`
+# (allocated extents only -- a plain `rbd export` emits the full provisioned
+# size, ~380 GiB of mostly zeros), pipe into `restic backup --stdin`, drop the
+# snapshot.
+#
+# Restore:
+#   restic dump <snapshot-id> <ns>_<pvc>.rbddiff | rbd import-diff - replicapool/<image>
+#
+# These are CRASH-consistent, not application-consistent. Postgres recovers
+# from this routinely, but for CNPG-managed clusters prefer the native
+# ScheduledBackup CRDs, which give real PITR.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ceph-rbd-offsite-backup
+  namespace: rook-ceph
+spec:
+  # 03:00 daily. TrueNAS runs its own restic job at 02:00; staggering keeps the
+  # two off the same upload window and avoids restic lock contention on the
+  # shared repository.
+  schedule: "0 3 * * *"
+  timeZone: America/Los_Angeles
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  # A run that overshoots into the next day is a failure worth seeing, not
+  # something to silently start twice.
+  startingDeadlineSeconds: 3600
+
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            app: ceph-rbd-offsite-backup
+        spec:
+          restartPolicy: OnFailure
+
+          # The toolbox image has `rbd` but no restic, and restic ships as a
+          # bare .bz2. Alpine's busybox has bunzip2.
+          initContainers:
+            - name: fetch-restic
+              image: alpine:3.20
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  V=0.17.3
+                  wget -q -O /shared/restic.bz2 \
+                    "https://github.com/restic/restic/releases/download/v${V}/restic_${V}_linux_amd64.bz2"
+                  bunzip2 /shared/restic.bz2
+                  chmod +x /shared/restic
+                  /shared/restic version
+              volumeMounts:
+                - name: shared
+                  mountPath: /shared
+
+          containers:
+            - name: backup
+              image: rook/ceph:v1.15.6
+              command: ["/bin/bash", "/scripts/backup.sh"]
+              envFrom:
+                - secretRef:
+                    name: ceph-backup-restic
+              env:
+                - name: RESTIC_CACHE_DIR
+                  value: /tmp/restic-cache
+                - name: CEPH_POOL
+                  value: replicapool
+                # Metrics TSDBs, the log store and CI caches rebuild themselves
+                # and are among the largest volumes here.
+                - name: EXCLUDE_REGEX
+                  value: "csi-vol-f2ad6968|csi-vol-356d9303|csi-vol-f6fa7b82"
+                - name: ROOK_CEPH_USERNAME
+                  valueFrom:
+                    secretKeyRef:
+                      name: rook-ceph-mon
+                      key: ceph-username
+                - name: ROOK_CEPH_SECRET
+                  valueFrom:
+                    secretKeyRef:
+                      name: rook-ceph-mon
+                      key: ceph-secret
+              resources:
+                requests:
+                  cpu: 200m
+                  memory: 1Gi
+                limits:
+                  # The rook toolbox's stock 1Gi limit OOM-killed restic
+                  # mid-run when this was first attempted by hand.
+                  memory: 6Gi
+              volumeMounts:
+                - name: shared
+                  mountPath: /shared
+                - name: scripts
+                  mountPath: /scripts
+                - name: ceph-config
+                  mountPath: /etc/ceph
+                - name: mon-endpoint-volume
+                  mountPath: /etc/rook
+                - name: tmp
+                  mountPath: /tmp
+
+          volumes:
+            - name: shared
+              emptyDir: {}
+            - name: tmp
+              emptyDir: {}
+            - name: scripts
+              configMap:
+                name: ceph-backup-script
+                defaultMode: 0755
+            - name: ceph-config
+              emptyDir: {}
+            - name: mon-endpoint-volume
+              configMap:
+                name: rook-ceph-mon-endpoints
+                items:
+                  - key: data
+                    path: mon-endpoints

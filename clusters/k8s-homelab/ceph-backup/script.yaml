@@ -1,0 +1,127 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ceph-backup-script
+  namespace: rook-ceph
+data:
+  backup.sh: |
+    #!/bin/bash
+    set -u
+
+    POOL="${CEPH_POOL:-replicapool}"
+    # PVCs whose contents rebuild themselves -- metrics TSDBs, log stores and
+    # build caches. They are also among the largest volumes, so skipping them
+    # is most of the savings.
+    EXCLUDE_REGEX="${EXCLUDE_REGEX:-}"
+
+    CEPH_CONFIG=/etc/ceph/ceph.conf
+    KEYRING_FILE=/etc/ceph/keyring
+    MON_CONFIG=/etc/rook/mon-endpoints
+
+    # --- Replicate the rook toolbox's ceph client bootstrap -----------------
+    endpoints=$(cat "${MON_CONFIG}")
+    mon_endpoints=$(echo "${endpoints}" | sed 's/[a-z0-9_-]\+=//g')
+
+    cat <<EOF > "${KEYRING_FILE}"
+    [${ROOK_CEPH_USERNAME}]
+    key = ${ROOK_CEPH_SECRET}
+    EOF
+
+    cat <<EOF > "${CEPH_CONFIG}"
+    [global]
+    mon_host = ${mon_endpoints}
+
+    [client.admin]
+    keyring = ${KEYRING_FILE}
+    EOF
+
+    echo "mon endpoints: ${mon_endpoints}"
+    mkdir -p "${RESTIC_CACHE_DIR:-/tmp/restic-cache}"
+
+    RESTIC=/shared/restic
+    "${RESTIC}" snapshots >/dev/null 2>&1 || {
+      echo "restic repository unreachable -- check credentials"; exit 1
+    }
+
+    TS=$(date +%Y%m%d-%H%M%S)
+    OK=0; FAIL=0; SKIP=0
+
+    # Publish the PVC->image mapping alongside the data. Without it the
+    # csi-vol-* names in the repo are unidentifiable at restore time.
+    if [ -f /scripts/pvc-map.txt ]; then
+      "${RESTIC}" backup --stdin --stdin-filename "pvc-map.txt" \
+        --tag ceph-rbd --tag metadata --host k8s-homelab < /scripts/pvc-map.txt \
+        && echo "OK: pvc-map.txt"
+    fi
+
+    for IMG in $(rbd ls "${POOL}"); do
+      if [ -n "${EXCLUDE_REGEX}" ] && echo "${IMG}" | grep -qE "${EXCLUDE_REGEX}"; then
+        echo "SKIP: ${IMG}"; SKIP=$((SKIP+1)); continue
+      fi
+
+      LABEL="${IMG}"
+      if [ -f /scripts/pvc-map.txt ]; then
+        M=$(awk -v i="${IMG}" '$1==i {print $2}' /scripts/pvc-map.txt | head -1)
+        [ -n "${M}" ] && LABEL="${M}"
+      fi
+
+      SNAP="restic-backup-${TS}"
+      echo "=== ${LABEL} (${IMG})"
+
+      if ! rbd snap create "${POOL}/${IMG}@${SNAP}" 2>&1; then
+        echo "SNAP FAILED: ${LABEL}"; FAIL=$((FAIL+1)); continue
+      fi
+
+      # No --from-snap, so this emits every allocated extent and nothing else.
+      if rbd export-diff "${POOL}/${IMG}@${SNAP}" - 2>/dev/null \
+         | "${RESTIC}" backup --stdin --stdin-filename "${LABEL}.rbddiff" \
+             --tag ceph-rbd --tag "${LABEL}" --host k8s-homelab; then
+        echo "OK: ${LABEL}"; OK=$((OK+1))
+      else
+        echo "BACKUP FAILED: ${LABEL}"; FAIL=$((FAIL+1))
+      fi
+
+      rbd snap rm "${POOL}/${IMG}@${SNAP}" >/dev/null 2>&1 \
+        || echo "WARNING: leaked snapshot ${POOL}/${IMG}@${SNAP}"
+    done
+
+    echo "=== COMPLETE ok=${OK} fail=${FAIL} skip=${SKIP}"
+    [ "${FAIL}" -eq 0 ]
+  # Regenerate after adding or removing PVCs:
+  #   kubectl get pv -o json | jq -r '.items[]|select(.spec.csi.driver|test("rbd"))|
+  #     "\(.spec.csi.volumeAttributes.imageName) \(.spec.claimRef.namespace)_\(.spec.claimRef.name)"'
+  pvc-map.txt: |
+    csi-vol-0397a492-c93f-4796-a3f5-125abf5ebe9e nextcloud_nextcloud-postgresql-pvc
+    csi-vol-1785a3f5-5b4e-46f5-8fae-f337b79c457d homestead_homestead-pvc
+    csi-vol-178a41e5-420e-4837-92ec-2e97197939da monitoring_grafana-postgres-3
+    csi-vol-2ccb5cdb-842a-4655-a2d1-4ebd243dfbc5 invoice-ninja_ivmariapvc
+    csi-vol-33298680-8edd-43ff-afb6-92ccd3b18760 authentik_authentik-postgres-3
+    csi-vol-33a2caa2-9034-40eb-a979-67613c845c72 jellyfin_jellyfinconfigpvc
+    csi-vol-356d9303-0f3f-4c44-8394-7371f1de2839 monitoring_storage-loki-0
+    csi-vol-4618108d-9d8e-49ae-9c80-cdcb17dbb5aa nextcloud_nextcloud-app-pvc
+    csi-vol-49ba7ff5-a8bd-4ca5-826a-08a0fa0ad7a7 vault_data-vault-2
+    csi-vol-5200bfba-637e-4d71-8759-bbe9eb09b4d2 jellyfin_jellyfintvpvc
+    csi-vol-53fc1f70-f81e-4700-8e8f-09378138e088 files_srvfilespvc
+    csi-vol-585c6646-6455-4ed2-9cb1-dce23cd8062a invoice-ninja_redis-data-invoice-ninja-hc-redis-node-0
+    csi-vol-5f949a8f-6a28-44f7-80ad-d44b49883838 authentik_data-authentik-postgresql-0
+    csi-vol-634befe8-d30f-4e27-956b-ffb059938990 monitoring_grafana-postgres-2
+    csi-vol-64bbd13c-2804-4934-acf8-76cacfdbbb3c invoice-ninja_ivpublicpvc
+    csi-vol-69bf8f53-d6a4-45bd-a811-c8cb187041e8 nextcloud_nextcloud-data-pvc
+    csi-vol-69bfe828-428d-4bbe-9a7b-b46f09581ba1 files_databasefilespvc
+    csi-vol-6c612953-0caa-479f-a1cc-a963bf1e552c authentik_authentik-postgres-2
+    csi-vol-757274fc-f158-4f90-bfb7-4c8d8162f80b home-assistant_esphome-config-pvc
+    csi-vol-7b9724b4-2598-45ef-89cb-9f5d45efbdee immich_postgresql-pvc
+    csi-vol-7dca4176-8dd2-43fd-b76a-f7f27ce19677 jellyfin_jellyfinmoviespvc
+    csi-vol-91af236b-da1c-491a-ae0e-2d02564b0c27 home-assistant_home-assistant-config-pvc
+    csi-vol-a9b47c85-8096-4a61-8c5c-e1bc4ee0176d vaultwarden_vaultwarden-data-pvc
+    csi-vol-ab55bcd4-5dea-42e9-99bb-c688e376cc31 vault_data-vault-0
+    csi-vol-ae4d79e9-eafb-40ea-9217-b1a0cd77af39 vault_data-vault-1
+    csi-vol-c68de5f8-2240-4678-b3a2-e2ac83efc5d9 invoice-ninja_ivstoragepvc
+    csi-vol-d4979793-d6a2-4fd4-8055-4af6ead94a9e immich_immichpvc
+    csi-vol-d4d1c866-0f05-4109-a2ec-369b18d707b5 authentik_authentik-postgres-1
+    csi-vol-eef35683-be8f-4b09-84df-266f732c3b44 mealie_mealie-data-pvc
+    csi-vol-f12db89e-7b79-4a11-8267-a0cb4c675a50 files_configfilespvc
+    csi-vol-f2ad6968-2cc8-4050-a64c-2996ece28535 monitoring_prometheus-kube-prometheus-stack-prometheus-db-prometheus-kube-prometheus-stack-prometheus-0
+    csi-vol-f67c5994-359e-4a33-8599-cf58d91068ea monitoring_grafana-postgres-1
+    csi-vol-f6fa7b82-d0b6-4ef5-962e-f6f04cea765f monitoring_alertmanager-kube-prometheus-stack-alertmanager-db-alertmanager-kube-prometheus-stack-alertmanager-0
