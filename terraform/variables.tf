@@ -125,14 +125,7 @@ variable "workers" {
   }
 }
 
-variable "ceph_osd_disk_size" {
-  description = "Size in GB of the dedicated raw block device added to each worker for Rook/Ceph OSDs"
-  type        = number
-  default     = 100
-}
-
-variable "ceph_osd_disk_size_2" {
-  description = "Size in GB of the second dedicated raw block device added to each worker for Rook/Ceph OSDs"
-  type        = number
-  default     = 200
-}
+# ceph_osd_disk_size / ceph_osd_disk_size_2 were removed 2026-08-16 along with
+# the scsi1/scsi2 disk blocks in vms-workers.tf. Ceph OSDs are now backed by a
+# PCIe-passthrough Samsung 990 PRO 4TB per worker rather than virtual disks
+# carved out of the hypervisor's single Solidigm NVMe. See vms-workers.tf.

@@ -41,26 +41,19 @@ resource "proxmox_virtual_environment_vm" "worker" {
     ssd          = true
   }
 
-  # Dedicated raw block device for Rook/Ceph OSD backing — left unformatted,
-  # Ceph consumes the whole device directly.
-  disk {
-    datastore_id = var.storage_pool
-    interface    = "scsi1"
-    size         = var.ceph_osd_disk_size
-    ssd          = true
-  }
-
-  # Second OSD disk added ahead of the dev-cluster migration -- original
-  # 100GB/worker (300GB raw, ~81GiB usable after 3x replication) was too
-  # tight against dev's real data footprint (~75-90GB). Additive rather
-  # than resizing the existing scsi1 disks live, to avoid any risk to
-  # already-written OSD data.
-  disk {
-    datastore_id = var.storage_pool
-    interface    = "scsi2"
-    size         = var.ceph_osd_disk_size_2
-    ssd          = true
-  }
+  # NO scsi1/scsi2 OSD disks any more. Ceph OSDs are now backed by a
+  # PCIe-passthrough Samsung 990 PRO 4TB per worker (0000:41/42/43:00 ->
+  # 9111/9112/9113), attached outside Terraform via `qm set -hostpci0`.
+  #
+  # The old scsi1 (100GB) + scsi2 (200GB) virtual disks were all carved out of
+  # the single Solidigm P41 Plus that also holds every VM root disk, so all six
+  # OSDs plus every VM shared one DRAM-less consumer NVMe. That produced
+  # persistent "OSD(s) experiencing slow operations in BlueStore" warnings.
+  # Drained, purged and deleted 2026-08-16, reclaiming ~354GB.
+  #
+  # Do NOT re-add them: rook-ceph's deviceFilter is "^nvme0n1$", but a disk
+  # appearing at sdb/sdc is exactly the kind of thing a future filter change
+  # would silently adopt, rebuilding the problem.
 
   network_device {
     bridge  = "vmbr0"
