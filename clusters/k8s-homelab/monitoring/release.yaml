@@ -71,13 +71,24 @@ spec:
               resources:
                 requests:
                   storage: 20Gi
+        # 1Gi was not enough headroom for ~179k head series: peak working
+        # set sat at 974Mi/1024Mi (95%), so Go's GC ran continuously. That
+        # starved the long-range recording rules -- the kube-apiserver
+        # burnrate/availability groups (30d, 3d, 6h windows) failed with
+        # "expanding series: context deadline exceeded" -- and stalled the
+        # HTTP handler past the 3s probe timeout, producing recurring
+        # Readiness/Liveness probe failures on the prometheus pod.
+        #
+        # It was never OOMKilled and never CPU-throttled (measured
+        # throttle ratio 0), which is why this looked like a hang rather
+        # than a crash. Grazing the ceiling, not crossing it.
         resources:
           requests:
             cpu: "200m"
             memory: "512Mi"
           limits:
             cpu: "1000m"
-            memory: "1Gi"
+            memory: "2Gi"
 
     grafana:
       admin:
