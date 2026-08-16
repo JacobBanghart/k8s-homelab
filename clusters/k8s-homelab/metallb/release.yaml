@@ -21,3 +21,56 @@ spec:
     crds: CreateReplace
     remediation:
       retries: 3
+  # Both the controller and the speaker DaemonSet shipped with no resource
+  # requests, which made them BestEffort: the first QoS class the kubelet
+  # evicts under node memory pressure, and the highest oom_score_adj for the
+  # kernel OOM killer.
+  #
+  # That is the wrong eviction order for what MetalLB does. The speaker is
+  # what answers ARP for every LoadBalancer VIP on this cluster --
+  # 10.4.0.200 (Traefik, which carries all WAN traffic), .201 (Mosquitto),
+  # .202 (Minecraft) and .203 (the Ceph dashboard). Evicting it on a node
+  # under memory pressure withdraws those VIPs from that node exactly when
+  # the cluster is already struggling.
+  #
+  # The speaker pod has four containers and a pod is only better than
+  # BestEffort if EVERY container has requests, so all four are sized here.
+  # Requests come from observed usage (speaker ~29-55Mi, frr ~21Mi,
+  # frr-metrics ~10-14Mi, reloader ~1Mi); the point is to buy a QoS class,
+  # not to reserve capacity.
+  values:
+    controller:
+      resources:
+        requests:
+          cpu: "25m"
+          memory: "96Mi"
+        limits:
+          memory: "256Mi"
+    speaker:
+      resources:
+        requests:
+          cpu: "25m"
+          memory: "96Mi"
+        limits:
+          memory: "256Mi"
+      frr:
+        resources:
+          requests:
+            cpu: "10m"
+            memory: "48Mi"
+          limits:
+            memory: "128Mi"
+      frrMetrics:
+        resources:
+          requests:
+            cpu: "10m"
+            memory: "32Mi"
+          limits:
+            memory: "96Mi"
+      reloader:
+        resources:
+          requests:
+            cpu: "10m"
+            memory: "16Mi"
+          limits:
+            memory: "64Mi"
