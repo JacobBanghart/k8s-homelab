@@ -42,18 +42,21 @@ spec:
       storage:
         useAllNodes: true
         useAllDevices: false
-        # sdb/sdc are the original virtual OSD disks, both backed by the
-        # single Solidigm P41 Plus on the hypervisor. sdc was added ahead of
-        # the dev-cluster migration -- 3x100GB was too tight against dev's
-        # real footprint once measured. See terraform/vms-workers.tf
-        # ceph_osd_disk_size_2 and docs/decisions.md.
-        #
         # nvme0n1 is a PCIe-passthrough Samsung 990 PRO 4TB, one per worker
         # (0000:41/42/43:00 -> 9111/9112/9113), freed from TrueNAS 2026-08-15.
         # A fourth (0000:44:00) is deliberately held as an unassigned cold
         # spare: under replica-3 with host failure domain, usable capacity is
         # bounded by the smallest host, so a 2/1/1 split would strand it.
-        deviceFilter: "^(sd[bc]|nvme0n1)$"
+        #
+        # sdb/sdc were the original virtual OSD disks, both backed by the
+        # single Solidigm P41 Plus on the hypervisor -- which meant every OSD
+        # in the cluster shared one DRAM-less consumer NVMe with every VM root
+        # disk, and produced persistent "OSD(s) experiencing slow operations
+        # in BlueStore" warnings. Those OSDs (0-5) were drained and purged
+        # 2026-08-16 and the virtual disks removed. sd[bc] is deliberately NOT
+        # matched any more: leaving it in would let Rook re-adopt those devices
+        # and silently recreate the problem.
+        deviceFilter: "^nvme0n1$"
       resources:
         mgr:
           limits:

@@ -1,0 +1,40 @@
+---
+# Let kube-prometheus-stack scrape Ceph.
+#
+# Without this nothing collects from the mgr's Prometheus exporter
+# (rook-ceph-mgr:9283), so every chart-based page in the Ceph dashboard shows
+# "please enable and configure monitoring functionality" instead of data.
+#
+# The `release: kube-prometheus-stack` label is mandatory -- that Prometheus
+# instance selects ServiceMonitors with
+#   serviceMonitorSelector: matchLabels: {release: kube-prometheus-stack}
+# and an empty namespace selector, so a ServiceMonitor anywhere is picked up,
+# but only if it carries that label.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: rook-ceph-mgr
+  namespace: rook-ceph
+  labels:
+    release: kube-prometheus-stack
+spec:
+  namespaceSelector:
+    matchNames:
+      - rook-ceph
+  # NOTE: this selector matches SERVICE labels, which are only
+  # app/rook_cluster. `mgr_role: active` is on the Service's *pod* selector
+  # (spec.selector) and on the mgr pods -- putting it here matched nothing.
+  # Filtering to the active mgr is already handled by the Service itself: its
+  # own pod selector includes mgr_role=active, so the endpoint list only ever
+  # contains the active mgr.
+  selector:
+    matchLabels:
+      app: rook-ceph-mgr
+      rook_cluster: rook-ceph
+  endpoints:
+    - port: http-metrics
+      path: /metrics
+      interval: 30s
+      # The exporter can be slow on a large cluster mid-backfill.
+      scrapeTimeout: 25s
+      honorLabels: true

@@ -1,0 +1,46 @@
+---
+# Ceph dashboard on a LAN-only MetalLB VIP.
+#
+# Deliberately NOT a Traefik IngressRoute. Traefik sits on 10.4.0.200, which
+# has a WAN port-forward (UnifiTerraform port_forwards.tf: WAN:443 ->
+# 10.4.0.200:443), and Traefik routes on the Host header rather than on DNS --
+# so any IngressRoute on the `websecure` entrypoint is reachable from the
+# public internet by anyone sending the right header. Worse, issuing a Let's
+# Encrypt cert for it would publish the hostname in Certificate Transparency
+# logs, which are routinely scraped for exactly this kind of admin panel.
+#
+# Port forwards are per-IP, so this VIP has no path from the WAN. VLAN 30 is
+# reachable from the primary LAN via the `Allow Internal to k8s-lab` policy in
+# unifi/firewall.tf.
+#
+# Access: https://10.4.0.203:8443  (self-signed cert -- Rook generates it, so
+# expect a browser warning. Credentials are in the rook-ceph-dashboard-password
+# secret in this namespace.)
+#
+# NOTE: `kubectl port-forward` does not work for the dashboard. Rook binds the
+# mgr to the pod IP only -- the pod listens on <podIP>:8443 and nothing on
+# loopback, while port-forward connects to localhost inside the pod namespace.
+apiVersion: v1
+kind: Service
+metadata:
+  name: rook-ceph-mgr-dashboard-lb
+  namespace: rook-ceph
+  annotations:
+    metallb.universe.tf/address-pool: k8s-lab-pool
+    # This VIP is LAN-only on purpose; never publish it to Cloudflare.
+    external-dns.alpha.kubernetes.io/controller: "none"
+spec:
+  type: LoadBalancer
+  loadBalancerIP: 10.4.0.203
+  # Same selector Rook uses for its own dashboard service. mgr_role=active
+  # matters: the standby mgr does not serve the dashboard, so omitting it
+  # yields intermittent connection-refused after a failover.
+  selector:
+    app: rook-ceph-mgr
+    mgr_role: active
+    rook_cluster: rook-ceph
+  ports:
+    - name: https-dashboard
+      port: 8443
+      targetPort: 8443
+      protocol: TCP
