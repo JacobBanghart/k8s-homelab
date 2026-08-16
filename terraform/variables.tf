@@ -64,12 +64,30 @@ variable "masters" {
     vm_id  = number
     cores  = optional(number, 6)
     memory = optional(number, 6144)
-    # Ballooning floor. The guest boots at `memory` and the host may reclaim
-    # down to this under pressure, never below. Keep it comfortably above the
-    # node's real working set -- kubelet computes allocatable from MemTotal at
-    # startup and does not learn about balloon inflation, so a floor set below
-    # actual usage shows up as OOM kills rather than as scheduling pressure.
-    memory_min = optional(number, 4096)
+    # Ballooning floor -- now set EQUAL to `memory`, which disables ballooning.
+    #
+    # The old comment here had the hazard right but the mitigation wrong. It
+    # said to keep the floor "comfortably above the node's real working set",
+    # because kubelet computes allocatable from MemTotal at startup and never
+    # learns about balloon inflation. The flaw is that kubelet does not
+    # schedule against the working set, it schedules against REQUESTS -- and
+    # requests are allowed to exceed observed usage by a wide margin.
+    #
+    # That is not theoretical. On 2026-08-16 the workers were found ballooned
+    # down to their 16384 floor (guest MemTotal 15.0GiB) while kubelet still
+    # advertised the boot-time ~22.9GiB, and worker-1 was carrying 19.4GiB of
+    # requests. The node had accepted 19GiB of promises on a 15GiB machine.
+    # It only became visible when the kubelet restarted during the Kubernetes
+    # 1.31 upgrade and re-read MemTotal: allocatable dropped to 15.2GiB, two
+    # workers jumped to 99% requested, and pods began failing to schedule with
+    # "Insufficient memory". It is also the most likely explanation for the
+    # 2026-08-09 OOM that killed the homestead JVM and took k8s-worker-2
+    # NotReady.
+    #
+    # There is no safe floor below `memory` for a Kubernetes node. Any gap is
+    # memory kubelet believes it has and does not. Ballooning is a fine tool
+    # for guests that tolerate a moving MemTotal; kubelet is not one of them.
+    memory_min = optional(number, 6144)
     # Per-node golden-image override; null means use var.template_vm_id.
     # Set this on ONE node to rebuild it onto a new image, then clear it once
     # the fleet has caught up. Never bump var.template_vm_id itself -- it is
@@ -104,14 +122,19 @@ variable "workers" {
     # way (`kubectl describe nodes | grep -A5 "Allocated resources"`) before
     # changing it, and remember allocatable is only ~77% of guest RAM.
     memory = optional(number, 24576)
-    # See the note on masters.memory_min. Do NOT read this as
-    # reclaimable-on-demand: ballooning a guest that has already filled its page
-    # cache returns memory slowly and unreliably, and not at all fast enough for
-    # a VFIO pin. Booting the guest smaller is what actually gives RAM back to
-    # the host; this floor only bounds how far it can be squeezed afterwards.
-    # Raised 12288 -> 16384 with the memory bump so the floor still sits above
-    # observed steady-state usage (7.5-9.8GiB) with margin.
-    memory_min = optional(number, 16384)
+    # Set EQUAL to `memory` -- see the long note on masters.memory_min for why
+    # any gap is unsafe on a Kubernetes node.
+    #
+    # This is the value that actually bit. It was raised 12288 -> 16384 on the
+    # reasoning that the floor sat "above observed steady-state usage
+    # (7.5-9.8GiB) with margin" -- true of usage, irrelevant to scheduling.
+    # Requests on worker-1 had reached 19.4GiB, so once the balloon inflated to
+    # the 16384 floor the node was ~4GiB short of the promises it had already
+    # made, with kubelet unaware.
+    #
+    # If RAM genuinely has to be returned to the host, lower `memory` and
+    # reboot the guest. Do not reintroduce a floor below it.
+    memory_min = optional(number, 24576)
     # Per-node golden-image override; null means use var.template_vm_id.
     # Set this on ONE node to rebuild it onto a new image, then clear it once
     # the fleet has caught up. Never bump var.template_vm_id itself -- it is
