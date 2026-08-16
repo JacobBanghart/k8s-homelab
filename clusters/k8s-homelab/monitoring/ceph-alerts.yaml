@@ -1,0 +1,125 @@
+---
+# Ceph alerting.
+#
+# Before 2026-08-16 there were none. rook-ceph/servicemonitor.yaml gets the
+# mgr's exporter scraped, and the Grafana panels read from it, but not a
+# single PrometheusRule referenced any ceph_* metric -- every one of the 153
+# loaded rules came from kube-prometheus-stack. An OSD could go down, a mon
+# could drop out of quorum, or the cluster could go HEALTH_ERR and nothing
+# anywhere would say so.
+#
+# This is deliberately a small hand-picked set rather than the upstream Ceph
+# mixin. The mixin carries ~50 rules tuned for large clusters -- pool
+# fill-rate predictions, per-daemon latency, slow-op thresholds -- most of
+# which either never fire here or fire chronically on a 3-OSD cluster. The
+# rules below cover the failure modes that actually take this cluster down.
+#
+# Every metric name here was verified present in Prometheus on 2026-08-16
+# rather than copied from documentation.
+#
+# `for:` durations are long on purpose. Ceph is self-healing and briefly
+# reports WARN during entirely normal events -- an OSD restart, a rolling
+# node reboot, backfill after a disk swap. Anything shorter turns routine
+# maintenance into mail.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: ceph-rules
+  namespace: monitoring
+  labels:
+    # Required for this Prometheus to select the rule -- same
+    # `release: kube-prometheus-stack` selector convention documented in
+    # rook-ceph/servicemonitor.yaml.
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: ceph.health
+      rules:
+        # ceph_health_status: 0 = HEALTH_OK, 1 = HEALTH_WARN, 2 = HEALTH_ERR.
+        - alert: CephHealthError
+          expr: ceph_health_status == 2
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Ceph is HEALTH_ERR"
+            description: "Ceph has been in HEALTH_ERR for 5m. Run `ceph -s` in the rook-ceph toolbox; this generally means unfound objects, full OSDs, or PGs that cannot peer."
+
+        # 30m rather than 5m: a rolling worker reboot or an OSD restart puts
+        # the cluster into WARN for several minutes as a matter of course.
+        - alert: CephHealthWarning
+          expr: ceph_health_status == 1
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Ceph has been HEALTH_WARN for 30m"
+            description: "Long enough that this is not routine backfill. Check `ceph health detail`."
+
+    - name: ceph.osd
+      rules:
+        - alert: CephOSDDown
+          expr: ceph_osd_up == 0
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Ceph OSD {{ $labels.ceph_daemon }} is down"
+            description: "This cluster runs one OSD per host with size=3 and failure domain host, so a single OSD down leaves NO remaining host to re-replicate onto -- Ceph will sit degraded until this OSD returns rather than healing itself. A second failure while this is down is not survivable."
+
+        # `in` but not `up` is the operator-initiated state during a planned
+        # OSD replacement, so this is warning-only and slow.
+        - alert: CephOSDDiskNotResponding
+          expr: ceph_osd_in == 1 and ceph_osd_up == 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "OSD {{ $labels.ceph_daemon }} is marked in but is not up"
+            description: "Expected briefly during a planned OSD swap. If unplanned, the disk or its host is failing."
+
+    - name: ceph.mon
+      rules:
+        - alert: CephMonQuorumLow
+          expr: sum(ceph_mon_quorum_status) < 3
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Only {{ $value }} of 3 Ceph mons in quorum"
+            description: "Quorum survives losing one mon. Losing a second stops all Ceph I/O cluster-wide, which stops every PVC-backed workload."
+
+    - name: ceph.capacity
+      rules:
+        # Sits at ~3% today. These thresholds exist so that a runaway writer
+        # is caught long before Ceph starts refusing writes, not because
+        # capacity is a current concern.
+        - alert: CephClusterNearFull
+          expr: (ceph_cluster_total_used_raw_bytes / ceph_cluster_total_bytes) * 100 > 70
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Ceph raw usage at {{ $value | humanize }}%"
+            description: "Ceph sets a full ratio well below 100%; plan capacity now rather than at the ratio."
+
+        - alert: CephClusterCriticallyFull
+          expr: (ceph_cluster_total_used_raw_bytes / ceph_cluster_total_bytes) * 100 > 85
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Ceph raw usage at {{ $value | humanize }}%"
+            description: "Approaching the full ratio, past which Ceph stops accepting writes and every PVC-backed workload fails."
+
+    - name: ceph.pgs
+      rules:
+        # Any PG not active is I/O that is blocked or at risk right now.
+        - alert: CephPGsUnavailable
+          expr: sum(ceph_pg_total) - sum(ceph_pg_active) > 0
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: "{{ $value }} Ceph PGs are not active"
+            description: "Inactive PGs block I/O to any RBD image or CephFS file they hold. Check `ceph pg dump_stuck`."

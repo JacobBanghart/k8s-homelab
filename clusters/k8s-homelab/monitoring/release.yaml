@@ -44,6 +44,11 @@ spec:
       alertmanagerSpec:
         replicas: 1
         retention: 120h
+        # Mounts at /etc/alertmanager/secrets/alertmanager-smtp/MAIL_PASSWORD.
+        # See alertmanager-smtp-externalsecret.yaml for why the credential is
+        # borrowed from the invoice-ninja Vault path.
+        secrets:
+          - alertmanager-smtp
         storage:
           volumeClaimTemplate:
             spec:
@@ -60,9 +65,130 @@ spec:
             cpu: "200m"
             memory: "128Mi"
 
+      # Until 2026-08-16 this was the chart default, which is
+      # `receiver: "null"` for everything -- 153 loaded alert rules (40
+      # critical, 104 warning) all discarded, and the only thing ever firing
+      # was Watchdog, into nothing. Every incident this cluster has had was
+      # found by looking, not by being told.
+      #
+      # The routing below is deliberately allowlist-shaped rather than
+      # "critical goes to email": the top-level receiver stays "null", and
+      # mail is only reached by an explicit matching route. A rule that is
+      # noisy on a 6-node homelab therefore costs nothing until someone opts
+      # it in, and the default for anything newly added by a chart upgrade is
+      # silence rather than a 3am page.
+      #
+      # Alertmanager takes the FIRST matching route, so the suppressions have
+      # to come before the severity=critical catch-all.
+      config:
+        global:
+          resolve_timeout: 5m
+          smtp_from: alerts@jacobbanghart.com
+          smtp_smarthost: smtp.mx.cloudflare.net:587
+          smtp_auth_username: api_token
+          smtp_auth_password_file: /etc/alertmanager/secrets/alertmanager-smtp/MAIL_PASSWORD
+          # 587/STARTTLS, not the 465 that invoice-ninja uses. Alertmanager
+          # speaks STARTTLS and does not do implicit TLS, so pointing it at
+          # 465 yields a hang rather than a clear error. Both ports verified
+          # reachable from the cluster on 2026-08-16.
+          smtp_require_tls: true
+
+        route:
+          group_by: ["alertname", "namespace"]
+          # Deliberately slow. A rollout or a node reboot produces a burst of
+          # correlated alerts; waiting a minute to group them turns a dozen
+          # mails into one, and 24h repeat means an unresolved-but-known
+          # problem nags once a day rather than twice an hour.
+          group_wait: 1m
+          group_interval: 10m
+          repeat_interval: 24h
+          receiver: "null"
+
+          routes:
+            # --- suppressions (must precede the catch-all) ---------------
+            # Watchdog fires permanently by design as a dead-man's switch,
+            # and InfoInhibitor exists only to feed the inhibit_rules below.
+            # Neither is an event.
+            - receiver: "null"
+              matchers:
+                - alertname =~ "Watchdog|InfoInhibitor"
+
+            # KubeAPIErrorBudgetBurn is an SLO burn-rate alert tuned for
+            # clusters with real traffic. On six nodes any brief apiserver
+            # blip -- including a control-plane rollout we triggered
+            # ourselves -- burns enough of a tiny error budget to page.
+            #
+            # The KubeStateMetrics sharding alerts compare shard counts
+            # across replicas; kube-state-metrics runs a single replica here,
+            # so they are structurally false.
+            - receiver: "null"
+              matchers:
+                - alertname =~ "KubeAPIErrorBudgetBurn|KubeStateMetricsShardingMismatch|KubeStateMetricsShardsMissing"
+
+            # etcd latency thresholds assume dedicated etcd disks. These
+            # masters share NVMe with everything else, so fsync and gRPC
+            # latency alerts are chronic rather than informative. The etcd
+            # alerts that indicate actual failure -- NoLeader,
+            # InsufficientMembers, DatabaseQuotaLowSpace, failed gRPC -- are
+            # NOT suppressed and still reach mail via the critical route.
+            - receiver: "null"
+              matchers:
+                - alertname =~ "etcdGRPCRequestsSlow|etcdHighFsyncDurations"
+
+            # --- things worth an email ----------------------------------
+            - receiver: email
+              matchers:
+                - severity = critical
+
+            # Warning-severity rules that have each already corresponded to a
+            # real outage on this cluster, so they earn their place:
+            #
+            #   KubeContainerWaiting          the RWO Multi-Attach deadlock --
+            #                                 a pod stuck ContainerCreating
+            #                                 forever with nothing reporting it
+            #   KubeDeploymentReplicasMismatch the grafana rollout that sat
+            #                                 stalled for 5 days unnoticed
+            #   KubeNodeNotReady              the OOM kill that took
+            #                                 k8s-worker-2 out
+            #   CephHealth*                   added by ceph-alerts.yaml; there
+            #                                 were no Ceph rules at all before
+            - receiver: email
+              matchers:
+                - alertname =~ "KubeNodeNotReady|KubeNodeUnreachable|KubePodCrashLooping|KubeContainerWaiting|KubeDeploymentReplicasMismatch|KubeStatefulSetReplicasMismatch|KubePersistentVolumeFillingUp|TargetDown|CephHealthWarning|CephOSDDiskNotResponding|CephMonQuorumLow|CephClusterNearFull"
+
+        receivers:
+          - name: "null"
+          - name: email
+            email_configs:
+              - to: jacobmbanghart@gmail.com
+                send_resolved: true
+                headers:
+                  Subject: '{{ if eq .Status "firing" }}[FIRING {{ .Alerts.Firing | len }}]{{ else }}[RESOLVED]{{ end }} {{ .CommonLabels.alertname }} {{ .CommonLabels.namespace }}'
+
+        # Keep the chart's inhibition behaviour: a critical alert silences the
+        # matching warning/info for the same namespace+alertname, so one
+        # incident does not arrive as three mails at three severities.
+        inhibit_rules:
+          - source_matchers: ["severity = critical"]
+            target_matchers: ["severity =~ warning|info"]
+            equal: ["namespace", "alertname"]
+          - source_matchers: ["severity = warning"]
+            target_matchers: ["severity = info"]
+            equal: ["namespace", "alertname"]
+
     prometheus:
       prometheusSpec:
         retention: 15d
+        # Time-based retention alone does not protect the volume: if
+        # ingestion grows, 15d of samples can exceed 20Gi and Prometheus
+        # fills the PVC before the retention window ever triggers a
+        # deletion. retentionSize makes whichever limit is hit first win.
+        #
+        # 16GiB against a 20Gi claim leaves room for the WAL and for
+        # compaction, which needs scratch space while rewriting blocks --
+        # sizing this at or near the volume capacity is how you turn a
+        # disk-full into a wedged TSDB that needs manual block deletion.
+        retentionSize: 16GiB
         storageSpec:
           volumeClaimTemplate:
             spec:
@@ -256,3 +382,66 @@ spec:
           access: proxy
           url: http://loki:3100
           isDefault: false
+      # The dashboard sidecar shipped with no requests at all, which made it
+      # BestEffort -- see the node-exporter comment below for why that
+      # matters. It is small but it is in the same eviction class as the
+      # things that keep dashboards loaded.
+      sidecar:
+        resources:
+          requests:
+            cpu: "10m"
+            memory: "48Mi"
+          limits:
+            memory: "128Mi"
+
+    # --- Resource requests on the infrastructure DaemonSets ---------------
+    #
+    # These all shipped with no requests, which makes their pods BestEffort:
+    # the FIRST QoS class the kubelet evicts under node memory pressure, and
+    # the first the kernel OOM killer picks (BestEffort pods get the highest
+    # oom_score_adj).
+    #
+    # That ordering is backwards for what these components do. This cluster
+    # has already had the kernel OOM-kill a node into NotReady when the
+    # homestead JVM grew into memory Ceph needed (see homestead.yaml in the
+    # flux repo). In that scenario node-exporter is evicted precisely when
+    # its metrics are the only way to see what happened.
+    #
+    # Requests are set from observed usage, not guesses, and limits are left
+    # generous or unset -- the point is to buy a QoS class (Burstable), not
+    # to cap these.
+    prometheus-node-exporter:
+      resources:
+        requests:
+          cpu: "10m"
+          memory: "32Mi"
+        limits:
+          memory: "128Mi"
+
+    kube-state-metrics:
+      resources:
+        requests:
+          cpu: "20m"
+          memory: "96Mi"
+        limits:
+          memory: "256Mi"
+
+    prometheusOperator:
+      resources:
+        requests:
+          cpu: "20m"
+          memory: "96Mi"
+        limits:
+          memory: "256Mi"
+      # Runs as a sidecar in both the Prometheus and Alertmanager pods. Left
+      # unrequested it dragged those pods' QoS down with it: a pod is only
+      # Guaranteed/Burstable if EVERY container has requests, so one
+      # unrequested sidecar makes the whole pod BestEffort no matter how
+      # carefully the main container is sized.
+      prometheusConfigReloader:
+        resources:
+          requests:
+            cpu: "10m"
+            memory: "32Mi"
+          limits:
+            memory: "64Mi"
