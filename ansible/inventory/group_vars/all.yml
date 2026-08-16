@@ -22,16 +22,26 @@ control_plane_vip_router_id: 51
 # on the same VLAN from a different project interfering.
 control_plane_vip_auth_pass: "k8shomelab-vrrp"
 
-# PERSONALIZE: gates the control_plane_oidc role (see its tasks/main.yml),
-# which hardcodes this deployment's own Authentik OIDC issuer URL and
-# client_id into kube-apiserver. Defaults to true so this deployment's own
-# re-runs of the playbook keep working unchanged -- if you're standing up
-# your own cluster, set this to `false` in your own inventory/group_vars
-# override until you've set up your own OIDC provider and replaced the
-# PERSONALIZE'd values in that role, otherwise a plain `ansible-playbook
-# playbook.yml` run will point your kube-apiserver at an issuer you don't
-# control (which can crash-loop it if unreachable).
+# PERSONALIZE: gates the control_plane_oidc role (see its tasks/main.yml).
+# Defaults to true so this deployment's own re-runs of the playbook keep
+# working unchanged -- if you're standing up your own cluster, set this to
+# `false` in your own inventory/group_vars override until you've set up your
+# own OIDC provider and replaced the two values below, otherwise a plain
+# `ansible-playbook playbook.yml` run will point your kube-apiserver at an
+# issuer you don't control (which can crash-loop it if unreachable).
 oidc_enabled: true
+
+# PERSONALIZE: this deployment's own Authentik application. These used to be
+# hardcoded inside control_plane_oidc; they were lifted out here on
+# 2026-08-16 when that role was rewritten to drive the kubeadm-config
+# ClusterConfiguration instead of editing the static pod manifest, so that
+# forking the repo no longer means editing role internals.
+#
+# Neither value is a secret: the issuer URL is public, and an OIDC client_id
+# is an identifier rather than a credential (the apiserver only *validates*
+# tokens here, it never authenticates as this client).
+oidc_issuer_url: "https://auth.jacobbanghart.com/application/o/headlamp/"
+oidc_client_id: "BPpp9hCaFCjhfY9C8xOU5AvVYWcRCkjXVU3VeZIH"
 
 # PERSONALIZE: gates the split_horizon_dns role, whose defaults/main.yml
 # lists this deployment's own public hostnames and Traefik VIP. Defaults to

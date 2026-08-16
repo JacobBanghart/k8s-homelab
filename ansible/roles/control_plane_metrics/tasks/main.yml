@@ -1,12 +1,71 @@
 ---
-# kubeadm binds kube-scheduler/kube-controller-manager/etcd metrics to
-# 127.0.0.1 by default (security hardening) -- monitoring's own scrape
-# path is in-cluster (pod network, not host network), so 127.0.0.1 is
-# unreachable from Prometheus regardless of Service/Endpoints config.
-# Rebinding to 0.0.0.0 is safe here: these are still only reachable from
-# inside the cluster's pod/VLAN network, not exposed externally, and the
-# same tradeoff kubeadm made before defaulting to 127.0.0.1 in newer
-# versions.
+# kubeadm binds kube-scheduler, kube-controller-manager and etcd metrics to
+# 127.0.0.1 by default (security hardening). Prometheus scrapes from inside
+# the cluster over the pod network, not host network, so 127.0.0.1 is
+# unreachable from it regardless of Service/Endpoints config -- the
+# ServiceMonitors sit permanently "down" and the KubeSchedulerDown /
+# KubeControllerManagerDown alerts fire.
+#
+# Rebinding to 0.0.0.0 is acceptable here: these remain reachable only from
+# inside the cluster's pod/VLAN network and are not exposed externally. It is
+# the same tradeoff kubeadm itself made before it changed the default.
+#
+#
+# REWRITTEN 2026-08-16, for the same reason as control_plane_oidc -- see the
+# long note in that role. This one edited three static pod manifests in place
+# with `replace`, and `kubeadm upgrade apply` regenerates all three from the
+# kubeadm-config ConfigMap. With no extraArgs in that ConfigMap, every
+# upgrade would have silently reverted all three bindings and taken the
+# control-plane metrics dark again.
+#
+# That failure would at least have announced itself now that Alertmanager
+# actually delivers (KubeSchedulerDown and KubeControllerManagerDown are both
+# routed to mail), but the fix belongs in config rather than in a
+# post-upgrade repair.
+#
+# The ConfigMap is the source of truth. The manifests are only touched on a
+# fresh build, where `kubeadm init` has just written them with the 127.0.0.1
+# defaults and there is no upgrade to regenerate them.
+
+# kubeadm-config is cluster-wide, so this runs once rather than per host.
+- name: Ensure the kubeadm ClusterConfiguration carries the metrics bindings
+  # Merged in Python rather than with a kubectl patch: the ConfigMap holds
+  # the whole ClusterConfiguration as one YAML *string* under a single key,
+  # so a strategic-merge patch would replace the document, not merge into it.
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -euo pipefail
+      export KUBECONFIG=/etc/kubernetes/admin.conf
+      kubectl -n kube-system get cm kubeadm-config \
+        -o jsonpath='{.data.ClusterConfiguration}' > /tmp/cc-metrics-current.yaml
+      python3 - <<'PYEOF' > /tmp/cc-metrics-desired.yaml
+      import yaml
+      cc = yaml.safe_load(open("/tmp/cc-metrics-current.yaml"))
+      cc.setdefault("controllerManager", {}).setdefault("extraArgs", {})["bind-address"] = "0.0.0.0"
+      cc.setdefault("scheduler", {}).setdefault("extraArgs", {})["bind-address"] = "0.0.0.0"
+      cc.setdefault("etcd", {}).setdefault("local", {}).setdefault("extraArgs", {})["listen-metrics-urls"] = "http://0.0.0.0:2381"
+      print(yaml.safe_dump(cc, default_flow_style=False, sort_keys=True), end="")
+      PYEOF
+      if diff -q /tmp/cc-metrics-current.yaml /tmp/cc-metrics-desired.yaml >/dev/null 2>&1; then
+        echo UNCHANGED
+      else
+        kubectl -n kube-system create configmap kubeadm-config \
+          --from-file=ClusterConfiguration=/tmp/cc-metrics-desired.yaml \
+          --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+        echo UPDATED
+      fi
+  register: kubeadm_cc_metrics
+  changed_when: "'UPDATED' in kubeadm_cc_metrics.stdout"
+  run_once: true
+  delegate_to: "{{ groups['control_plane_init'][0] }}"
+
+# --- Fresh-build path only -------------------------------------------------
+#
+# `replace` is naturally idempotent here in a way lineinfile was not: it
+# rewrites 127.0.0.1 to 0.0.0.0 and matches nothing once that has happened,
+# regardless of whether the manifest was written by kubeadm or by an earlier
+# run of this role. So these are safe to leave unconditional.
 
 - name: Rebind kube-scheduler metrics to 0.0.0.0
   ansible.builtin.replace:
@@ -29,9 +88,9 @@
     replace: '--listen-metrics-urls=http://0.0.0.0:2381'
   register: etcd_patched
 
-# Static pod manifest edits are usually picked up by kubelet's own
-# fsnotify watch + periodic resync, but force it explicitly and
-# deterministically rather than waiting/hoping, one component at a time.
+# Static pod manifest edits are usually picked up by kubelet's own fsnotify
+# watch + periodic resync, but force it explicitly and deterministically
+# rather than waiting/hoping, one component at a time.
 - name: Force kube-scheduler restart if patched
   ansible.builtin.command:
     cmd: "kubectl delete pod kube-scheduler-{{ inventory_hostname }} -n kube-system --kubeconfig /etc/kubernetes/admin.conf"

@@ -1,43 +1,126 @@
 ---
-# PERSONALIZE: --oidc-issuer-url and --oidc-client-id below (in the loop)
-# are this deployment's own Authentik application -- replace with your own
-# OIDC provider's values before enabling this role (see oidc_enabled in
-# ansible/inventory/group_vars/all.yml, off by default for new forks).
+# PERSONALIZE: oidc_issuer_url and oidc_client_id in
+# ansible/inventory/group_vars/all.yml are this deployment's own Authentik
+# application -- replace with your own OIDC provider's values before enabling
+# this role (see oidc_enabled, off by default for new forks).
 #
-# Trusts Authentik as an OIDC issuer for kube-apiserver, so Headlamp
-# (and anything else that forwards an id_token as Bearer auth) can
-# authenticate real per-identity users instead of everyone sharing the
-# same cluster-admin ServiceAccount token. Additive -- existing
-# client-cert/ServiceAccount-token auth keeps working unchanged.
+# Trusts Authentik as an OIDC issuer for kube-apiserver, so Headlamp (and
+# anything else that forwards an id_token as Bearer auth) can authenticate
+# real per-identity users instead of everyone sharing one cluster-admin
+# ServiceAccount token. Additive -- existing client-cert/ServiceAccount-token
+# auth keeps working unchanged.
 #
-# --oidc-username-prefix=oidc: avoids collision between OIDC identities
-# and any existing client-cert/ServiceAccount username, and makes it
-# obvious in audit logs/RBAC bindings which auth path a request came
-# through.
+# --oidc-username-prefix=oidc: avoids collision between OIDC identities and
+# any existing client-cert/ServiceAccount username, and makes it obvious in
+# audit logs and RBAC bindings which auth path a request came through.
+#
+#
+# REWRITTEN 2026-08-16. This role used to edit
+# /etc/kubernetes/manifests/kube-apiserver.yaml directly with lineinfile.
+# That worked, but it put the flags somewhere kubeadm does not know about,
+# and `kubeadm upgrade apply` REGENERATES that manifest from the
+# kubeadm-config ConfigMap. Since the ConfigMap carried no extraArgs, the
+# first upgrade would have silently dropped all four flags and broken
+# Headlamp SSO -- once per minor version, with nothing in git to explain it.
+#
+# Confirmed against the live cluster before the change:
+#     apiServer.extraArgs = None
+# while the running apiserver had all four flags. `kubeadm upgrade diff`
+# after the change shows kubeadm generating them itself.
+#
+# The ConfigMap is now the source of truth. The manifest is only touched on a
+# fresh build, where `kubeadm init` has already written a manifest without
+# these flags and there is no upgrade to regenerate it.
+#
+# This also disposes of a real landmine. The old version inserted
+#     - "--oidc-username-prefix=oidc:"
+# and the comment explained why the quotes were load-bearing: unquoted, YAML
+# reads the trailing colon as a mapping indicator, folds the whole `command`
+# list into a single scalar, and kubelet rejects the static pod outright --
+# no container, not even crash-looping. That happened for real on
+# k8s-master-0. Going through kubeadm removes the hazard entirely, because
+# kubeadm serialises with a YAML marshaller that quotes the value itself.
 
-- name: Add OIDC flags to kube-apiserver manifest
+# kubeadm-config is cluster-wide, so this whole block runs once against a
+# single master rather than once per host.
+- name: Ensure the kubeadm ClusterConfiguration carries the OIDC arguments
+  # Merged in Python rather than with a kubectl patch: the ConfigMap stores
+  # the entire ClusterConfiguration as one YAML *string* under a single key,
+  # so a strategic-merge patch replaces the whole document instead of merging
+  # into it.
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -euo pipefail
+      export KUBECONFIG=/etc/kubernetes/admin.conf
+      kubectl -n kube-system get cm kubeadm-config \
+        -o jsonpath='{.data.ClusterConfiguration}' > /tmp/cc-current.yaml
+      python3 - <<'PYEOF' > /tmp/cc-desired.yaml
+      import yaml
+      cc = yaml.safe_load(open("/tmp/cc-current.yaml"))
+      cc.setdefault("apiServer", {}).setdefault("extraArgs", {}).update({
+          "oidc-issuer-url": "{{ oidc_issuer_url }}",
+          "oidc-client-id": "{{ oidc_client_id }}",
+          "oidc-username-claim": "email",
+          "oidc-username-prefix": "oidc:",
+      })
+      print(yaml.safe_dump(cc, default_flow_style=False, sort_keys=True), end="")
+      PYEOF
+      if diff -q /tmp/cc-current.yaml /tmp/cc-desired.yaml >/dev/null 2>&1; then
+        echo UNCHANGED
+      else
+        kubectl -n kube-system create configmap kubeadm-config \
+          --from-file=ClusterConfiguration=/tmp/cc-desired.yaml \
+          --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+        echo UPDATED
+      fi
+  register: kubeadm_cc
+  changed_when: "'UPDATED' in kubeadm_cc.stdout"
+  run_once: true
+  delegate_to: "{{ groups['control_plane_init'][0] }}"
+
+# --- Fresh-build path only -------------------------------------------------
+#
+# On an existing cluster the flags are already on the running apiserver and
+# the next `kubeadm upgrade apply` will regenerate them from the ConfigMap
+# above, so there is nothing to do here.
+#
+# Keyed off the LIVE apiserver rather than the file's contents, so it stays
+# idempotent no matter which format wrote it. kubeadm emits
+#     - --oidc-issuer-url=...
+# while the old lineinfile version wrote
+#     - "--oidc-issuer-url=..."
+# A file-content match against one format would re-add a duplicate flag after
+# the other one had written it.
+- name: Check whether the running apiserver already has the OIDC flags
+  ansible.builtin.shell:
+    cmd: >-
+      kubectl get pod kube-apiserver-{{ inventory_hostname }} -n kube-system
+      --kubeconfig /etc/kubernetes/admin.conf
+      -o jsonpath='{.spec.containers[0].command}' | grep -c -- '--oidc-issuer-url' || true
+  register: apiserver_has_oidc
+  changed_when: false
+  failed_when: false
+
+- name: Add the OIDC flags to the apiserver manifest on a fresh build
   ansible.builtin.lineinfile:
     path: /etc/kubernetes/manifests/kube-apiserver.yaml
     insertafter: '^    - --kubelet-preferred-address-types='
     line: "{{ item }}"
-  # oidc-username-prefix's value ends in a bare ":" -- unquoted, YAML
-  # reads the trailing colon as a mapping indicator and folds the whole
-  # `command` list into a single scalar string, which kubelet then
-  # rejects ("cannot unmarshal object into Go struct field
-  # Container.spec.containers.command of type string"). Hit this for
-  # real on k8s-master-0: kubelet dropped the static pod entirely
-  # (no container, not even crash-looping) until the line was quoted.
-  # Quote every inserted value defensively, not just this one.
+  # Quote every inserted value defensively -- see the trailing-colon note in
+  # the header. This path only runs before kubeadm has ever regenerated the
+  # manifest from config.
   loop:
-    - '    - "--oidc-issuer-url=https://auth.jacobbanghart.com/application/o/headlamp/"'
-    - '    - "--oidc-client-id=BPpp9hCaFCjhfY9C8xOU5AvVYWcRCkjXVU3VeZIH"'
+    - '    - "--oidc-issuer-url={{ oidc_issuer_url }}"'
+    - '    - "--oidc-client-id={{ oidc_client_id }}"'
     - '    - "--oidc-username-claim=email"'
     - '    - "--oidc-username-prefix=oidc:"'
+  when: apiserver_has_oidc.stdout | trim == "0"
   register: apiserver_patched
 
-# Static pod manifest edits are picked up by kubelet's own fsnotify
-# watch + periodic resync, but force it explicitly and deterministically
-# rather than waiting/hoping -- same pattern as control_plane_metrics.
+# Static pod manifest edits are picked up by kubelet's fsnotify watch and
+# periodic resync, but force it explicitly rather than waiting and hoping --
+# same pattern as control_plane_metrics.
 - name: Force kube-apiserver restart if patched
   ansible.builtin.command:
     cmd: "kubectl delete pod kube-apiserver-{{ inventory_hostname }} -n kube-system --kubeconfig /etc/kubernetes/admin.conf"
@@ -45,11 +128,10 @@
   changed_when: true
   failed_when: false
 
-# Wait for this master's apiserver to be back and Ready before `serial: 1`
-# lets the play move on to the next master -- a bad --oidc-issuer-url
-# (typo, unreachable, cert issue) makes kube-apiserver fail its own
-# health checks and crash-loop, so catch that here rather than plowing
-# ahead into the next master with a known-bad config.
+# Wait for this master's apiserver to be Ready before `serial: 1` moves on. A
+# bad --oidc-issuer-url (typo, unreachable, cert issue) makes kube-apiserver
+# fail its own health checks and crash-loop, so catch it here rather than
+# plowing into the next master with a known-bad config.
 - name: Wait for kube-apiserver to be Ready again on this master
   ansible.builtin.command:
     cmd: >-

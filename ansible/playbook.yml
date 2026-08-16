@@ -75,10 +75,11 @@
   tags: [control-plane-oidc]
   roles:
     # Gated by oidc_enabled (group_vars/all.yml, defaults true for this
-    # deployment) -- this role hardcodes this deployment's own OIDC
-    # issuer/client_id (see its tasks/main.yml, PERSONALIZE comment).
-    # New forks should set oidc_enabled: false until they've replaced
-    # those values with their own OIDC provider's.
+    # deployment). The issuer URL and client_id live alongside it as
+    # oidc_issuer_url / oidc_client_id -- they used to be hardcoded inside
+    # the role, and were lifted out on 2026-08-16 so forks no longer have
+    # to edit role internals. New forks should set oidc_enabled: false
+    # until they've replaced those two values with their own provider's.
     - { role: control_plane_oidc, when: oidc_enabled }
 
 - name: Split-horizon DNS for this cluster's own public hostnames
