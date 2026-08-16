@@ -119,9 +119,9 @@ variable "workers" {
     template_vm_id = optional(number, null)
   }))
   default = {
-    k8s-worker-0 = { ip = "10.4.0.20", vm_id = 9111 }
-    k8s-worker-1 = { ip = "10.4.0.21", vm_id = 9112 }
-    k8s-worker-2 = { ip = "10.4.0.22", vm_id = 9113 }
+    k8s-worker-0 = { ip = "10.4.0.20", vm_id = 9111, template_vm_id = 9001 }
+    k8s-worker-1 = { ip = "10.4.0.21", vm_id = 9112, template_vm_id = 9001 }
+    k8s-worker-2 = { ip = "10.4.0.22", vm_id = 9113, template_vm_id = 9001 }
   }
 }
 
