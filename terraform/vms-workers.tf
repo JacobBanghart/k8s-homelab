@@ -34,10 +34,16 @@ resource "proxmox_virtual_environment_vm" "worker" {
   # rust -- Ceph in particular picked its `hdd` BlueStore cache sizes and shard
   # counts, and classed all six OSDs as `hdd` in CRUSH. Set 2026-08-09.
   # Takes effect on VM restart; the flag is a device property, not live-settable.
+  # 100GB, raised from 60GB on 2026-08-16. containerd's image cache alone was
+  # 32GB, which pushed worker-2's root filesystem to 75% and tripped Ceph's
+  # MON_DISK_LOW -- the mons keep their database at dataDirHostPath
+  # /var/lib/rook on the NODE root disk, not in the Ceph pool, so a tight node
+  # root disk degrades cluster health. Growing an existing VM only enlarges the
+  # virtual device; ansible/roles/common grows the partition and filesystem.
   disk {
     datastore_id = var.storage_pool
     interface    = "scsi0"
-    size         = 60
+    size         = var.node_root_disk_size
     ssd          = true
   }
 

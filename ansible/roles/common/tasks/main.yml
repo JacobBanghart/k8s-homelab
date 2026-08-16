@@ -31,16 +31,34 @@
 # ASP.NET config-reload FileSystemWatcher) -- hit this for real as a
 # jellyfin CrashLoopBackOff after a routine node reboot surfaced how low
 # the untouched default was (2026-07-20).
+#
+# Must live in /etc/sysctl.d/ rather than ansible.posix.sysctl's default
+# sysctl_file of /etc/sysctl.conf: systemd 259 (Ubuntu 26.04) no longer
+# reads /etc/sysctl.conf at boot, so the original fix applied at runtime
+# via `reload: true` but silently reverted to 128 on every reboot. This
+# resurfaced as the same jellyfin CrashLoopBackOff on 2026-08-15.
 - name: Raise inotify limits so node reboots don't crash-loop file-watching pods
   ansible.posix.sysctl:
     name: "{{ item.name }}"
     value: "{{ item.value }}"
+    sysctl_file: /etc/sysctl.d/99-inotify.conf
     sysctl_set: true
     state: present
     reload: true
   loop:
     - { name: fs.inotify.max_user_instances, value: "1024" }
     - { name: fs.inotify.max_user_watches, value: "1048576" }
+
+# /etc/sysctl.conf is dead on systemd 259; drop the stale entries so the
+# file isn't a misleading record of settings that are no longer applied.
+- name: Remove stale inotify entries from the unused /etc/sysctl.conf
+  ansible.builtin.lineinfile:
+    path: /etc/sysctl.conf
+    regexp: "^{{ item }}="
+    state: absent
+  loop:
+    - fs.inotify.max_user_instances
+    - fs.inotify.max_user_watches
 
 - name: Confirm swap is off (should already be disabled by the Packer image)
   ansible.builtin.command: swapon --summary
@@ -51,3 +69,54 @@
   ansible.builtin.fail:
     msg: "Swap is active on {{ inventory_hostname }} — kubelet requires swap disabled"
   when: swap_check.stdout | trim | length > 0
+
+# Terraform sets the VM's disk size, but resizing an existing VM's disk only
+# grows the virtual block device -- the partition and filesystem inside stay
+# put. cloud-init's growpart runs at boot and would eventually catch it, but
+# that needs a reboot, and these tasks let a disk grow live.
+#
+# This became necessary when worker root disks hit 75% (32GB of that being
+# containerd's image cache) and tripped Ceph's MON_DISK_LOW: the mons store
+# their database at dataDirHostPath /var/lib/rook on the node root filesystem,
+# NOT in the Ceph pool, so a full node root disk degrades cluster health.
+- name: Ensure growpart is available for online disk growth
+  ansible.builtin.apt:
+    name: cloud-guest-utils
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Grow the root partition to fill the disk
+  ansible.builtin.command:
+    cmd: growpart /dev/sda 2
+  register: k8s_growpart
+  # growpart exits 1 with NOCHANGE when the partition already fills the disk,
+  # which is the normal steady state -- not a failure.
+  changed_when: "'CHANGED' in k8s_growpart.stdout"
+  failed_when:
+    - k8s_growpart.rc != 0
+    - "'NOCHANGE' not in k8s_growpart.stdout"
+
+# community.general.filesystem with resizefs:true shells out to resize2fs every
+# run and always reports "changed", so guard it on an actual size comparison.
+# 1% slack absorbs ext4 metadata overhead, which means the filesystem is never
+# byte-identical to the partition even when fully grown.
+- name: Check whether the root filesystem already fills its partition
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      part=$(blockdev --getsize64 /dev/sda2)
+      bs=$(tune2fs -l /dev/sda2 | awk '/^Block size:/{print $3}')
+      bc=$(tune2fs -l /dev/sda2 | awk '/^Block count:/{print $3}')
+      fs=$((bs * bc))
+      if [ $((part - fs)) -lt $((part / 100)) ]; then echo FULL; else echo GROW; fi
+    executable: /bin/bash
+  register: k8s_rootfs_fill
+  changed_when: false
+
+- name: Grow the root filesystem to fill the partition
+  community.general.filesystem:
+    fstype: ext4
+    dev: /dev/sda2
+    resizefs: true
+  when: "'GROW' in k8s_rootfs_fill.stdout"

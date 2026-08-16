@@ -125,6 +125,17 @@ variable "workers" {
   }
 }
 
+variable "node_root_disk_size" {
+  description = <<-EOT
+    Size in GB of each worker's root disk. Must leave room for containerd's
+    image cache (~32GB observed) on top of the OS: the Ceph mons store their
+    database on the node root filesystem via dataDirHostPath, so filling it
+    trips MON_DISK_LOW and degrades cluster health.
+  EOT
+  type        = number
+  default     = 100
+}
+
 # ceph_osd_disk_size / ceph_osd_disk_size_2 were removed 2026-08-16 along with
 # the scsi1/scsi2 disk blocks in vms-workers.tf. Ceph OSDs are now backed by a
 # PCIe-passthrough Samsung 990 PRO 4TB per worker rather than virtual disks

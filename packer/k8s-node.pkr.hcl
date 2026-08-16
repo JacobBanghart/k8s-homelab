@@ -44,6 +44,14 @@ source "proxmox-iso" "k8s_golden" {
 
   scsi_controller = "virtio-scsi-single"
 
+  # 20G is only a FLOOR for the golden image -- it is never the size a real
+  # node runs at. Terraform sets the actual root disk per node group
+  # (var.node_root_disk_size, 100G for workers; 40G for masters), and
+  # cloud-init's growpart expands the partition on first boot. Raising this
+  # would just make the template larger to clone with no benefit.
+  #
+  # If you DO raise it, it must stay <= the smallest size Terraform assigns,
+  # or the clone fails: Proxmox can grow a disk on clone but never shrink one.
   disks {
     type         = "scsi"
     disk_size    = "20G"
