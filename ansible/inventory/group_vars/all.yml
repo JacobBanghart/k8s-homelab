@@ -21,12 +21,12 @@ pod_network_cidr: "10.42.0.0/16"
 # the TOP of 1.16's supported range, so Cilium had to move before Kubernetes
 # could. Bumped to the latest 1.16 patch first because Cilium's upgrade guide
 # requires reaching the latest patch of the current minor before a minor bump.
-cilium_version: "1.16.19"
+cilium_version: "1.17.18"
 
 # Set to the minor the cluster is upgrading FROM (e.g. "1.16") during a minor
 # Cilium upgrade; it preserves datapath behaviour across the bump. Leave empty
 # for a fresh install or a patch-level bump.
-cilium_upgrade_compatibility: ""
+cilium_upgrade_compatibility: "1.16"
 
 # Floating VIP for the control plane, failover-only via keepalived (no
 # load-balancing across masters -- matches the same failover-only model
