@@ -84,14 +84,27 @@ spec:
         global:
           resolve_timeout: 5m
           smtp_from: alerts@jacobbanghart.com
-          smtp_smarthost: smtp.mx.cloudflare.net:587
+          smtp_smarthost: smtp.mx.cloudflare.net:465
           smtp_auth_username: api_token
           smtp_auth_password_file: /etc/alertmanager/secrets/alertmanager-smtp/MAIL_PASSWORD
-          # 587/STARTTLS, not the 465 that invoice-ninja uses. Alertmanager
-          # speaks STARTTLS and does not do implicit TLS, so pointing it at
-          # 465 yields a hang rather than a clear error. Both ports verified
-          # reachable from the cluster on 2026-08-16.
-          smtp_require_tls: true
+          # 465 (implicit TLS), matching what invoice-ninja already uses.
+          #
+          # This was briefly set to 587 on the assumption that Alertmanager
+          # needs STARTTLS. It does not work: smtp.mx.cloudflare.net is an
+          # inbound MX host, and probing it on 2026-08-16 showed 587 accepts
+          # a TCP connection and then never sends a banner, so Alertmanager
+          # failed with "create SMTP client: read: connection reset by peer"
+          # and retried 11 times. Only 25 (plaintext) and 465 (implicit TLS)
+          # actually speak SMTP.
+          #
+          # A plain TCP reachability check is NOT sufficient to validate this
+          # -- `nc -z` reported all four of 25/465/587/2525 open. The port has
+          # to be made to produce a 220 greeting.
+          #
+          # require_tls stays false because Alertmanager special-cases port
+          # 465 and dials TLS directly; the connection is already encrypted,
+          # and asking for STARTTLS on top of it is what this flag would do.
+          smtp_require_tls: false
 
         route:
           group_by: ["alertname", "namespace"]
