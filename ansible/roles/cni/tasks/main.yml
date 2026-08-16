@@ -12,6 +12,37 @@
     curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
   when: helm_check.rc != 0
 
+# The helm tasks below run as the `ansible` user against
+# /home/ansible/.kube/config, but nothing in this role guaranteed that file
+# existed. kubeadm_init writes it, and kubeadm_init is guarded on an
+# already-bootstrapped control plane -- so on a cluster that was built
+# earlier, `ansible-playbook --tags cni` reached the helm task with no
+# kubeconfig and helm fell back to its default of http://localhost:8080,
+# failing with "Kubernetes cluster unreachable". Hit for real on
+# k8s-master-2 on 2026-08-16.
+#
+# Recreating it here from admin.conf makes the role self-sufficient and is
+# idempotent -- copy compares content, so it is a no-op once correct.
+- name: Ensure the ansible user has a kubeconfig
+  block:
+    - name: Create .kube directory for the ansible user
+      ansible.builtin.file:
+        path: /home/ansible/.kube
+        state: directory
+        owner: ansible
+        group: ansible
+        mode: "0755"
+
+    - name: Copy admin.conf to the ansible user's kubeconfig
+      ansible.builtin.copy:
+        src: /etc/kubernetes/admin.conf
+        dest: /home/ansible/.kube/config
+        owner: ansible
+        group: ansible
+        mode: "0600"
+        remote_src: true
+  become: true
+
 - name: Add Cilium Helm repo
   kubernetes.core.helm_repository:
     name: cilium
@@ -20,28 +51,55 @@
   environment:
     KUBECONFIG: /home/ansible/.kube/config
 
-- name: Check if Cilium is already installed
-  ansible.builtin.command: kubectl -n kube-system get daemonset cilium
-  register: cilium_check
-  failed_when: false
-  changed_when: false
-  become: false
-  environment:
-    KUBECONFIG: /home/ansible/.kube/config
-
-- name: Install Cilium CNI
+# Deliberately NOT guarded on "is Cilium already installed".
+#
+# This task used to carry `when: cilium_check.rc != 0`, which made the role
+# install-only: once the DaemonSet existed, bumping cilium_version did
+# nothing at all and the role silently reported ok. That was discovered on
+# 2026-08-16 while planning the Kubernetes upgrade, where the CNI version is
+# the binding constraint -- Cilium 1.16 supports Kubernetes 1.27-1.30 only,
+# so the cluster could not move past 1.30 until Cilium moved first, and the
+# one role responsible for Cilium could not upgrade it.
+#
+# kubernetes.core.helm is already declarative: it installs when absent and
+# upgrades when chart_version or values drift, so the guard bought nothing
+# beyond preventing upgrades.
+#
+# UPGRADE ORDER MATTERS. Cilium supports one minor at a time, and its docs
+# require moving to the latest patch of the current minor first. Reaching
+# Kubernetes 1.34 from 1.30 therefore interleaves:
+#
+#   Cilium 1.16 -> 1.17   (k8s 1.29-1.32)   then k8s 1.30 -> 1.31 -> 1.32
+#   Cilium 1.17 -> 1.18   (k8s 1.30-1.33)   then k8s 1.32 -> 1.33
+#   Cilium 1.18 -> 1.19   (k8s 1.32-1.35)   then k8s 1.33 -> 1.34
+#
+# cilium_upgrade_compatibility preserves datapath behaviour across a minor
+# bump and should name the minor the cluster was last running, not the
+# target. Leave it unset for a fresh install or a patch-level bump.
+- name: Install or upgrade Cilium CNI
   kubernetes.core.helm:
     name: cilium
     chart_ref: cilium/cilium
     chart_version: "{{ cilium_version }}"
     release_namespace: kube-system
-    values:
-      ipam:
-        mode: kubernetes
-      kubeProxyReplacement: true
-      k8sServiceHost: "{{ control_plane_endpoint.split(':')[0] }}"
-      k8sServicePort: "{{ control_plane_endpoint.split(':')[1] }}"
-  when: cilium_check.rc != 0
+    # Wait for the rollout so a failed upgrade fails the play here rather
+    # than surfacing later as unexplained pod networking problems.
+    wait: true
+    wait_timeout: 10m
+    values: >-
+      {{
+        {
+          'ipam': {'mode': 'kubernetes'},
+          'kubeProxyReplacement': true,
+          'k8sServiceHost': control_plane_endpoint.split(':')[0],
+          'k8sServicePort': control_plane_endpoint.split(':')[1],
+        }
+        | combine(
+            {'upgradeCompatibility': cilium_upgrade_compatibility}
+            if cilium_upgrade_compatibility | default('', true) | length > 0
+            else {}
+          )
+      }}
   become: false
   environment:
     KUBECONFIG: /home/ansible/.kube/config

@@ -8,7 +8,25 @@
 # apiserver certSANs, so it is valid to address directly.
 control_plane_endpoint: "10.4.0.5:6443"
 pod_network_cidr: "10.42.0.0/16"
-cilium_version: "1.16.5"
+# Cilium is the binding constraint on how far Kubernetes can be upgraded --
+# each Cilium minor supports a bounded Kubernetes range:
+#
+#   Cilium 1.16   k8s 1.27-1.30
+#   Cilium 1.17   k8s 1.29-1.32
+#   Cilium 1.18   k8s 1.30-1.33
+#   Cilium 1.19   k8s 1.32-1.35
+#   Cilium 1.20   k8s 1.33-1.36
+#
+# The cluster sat on Cilium 1.16.5 with Kubernetes 1.30.14 -- i.e. already at
+# the TOP of 1.16's supported range, so Cilium had to move before Kubernetes
+# could. Bumped to the latest 1.16 patch first because Cilium's upgrade guide
+# requires reaching the latest patch of the current minor before a minor bump.
+cilium_version: "1.16.19"
+
+# Set to the minor the cluster is upgrading FROM (e.g. "1.16") during a minor
+# Cilium upgrade; it preserves datapath behaviour across the bump. Leave empty
+# for a fresh install or a patch-level bump.
+cilium_upgrade_compatibility: ""
 
 # Floating VIP for the control plane, failover-only via keepalived (no
 # load-balancing across masters -- matches the same failover-only model
