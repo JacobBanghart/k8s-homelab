@@ -49,3 +49,4 @@ terraform-aws-kms/tfplan
 # OS/editor cruft
 .DS_Store
 *.swp
+scripts/roll/.state/
