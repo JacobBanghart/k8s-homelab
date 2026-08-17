@@ -87,6 +87,19 @@ variable "masters" {
     # There is no safe floor below `memory` for a Kubernetes node. Any gap is
     # memory kubelet believes it has and does not. Ballooning is a fine tool
     # for guests that tolerate a moving MemTotal; kubelet is not one of them.
+    #
+    # IMPORTANT -- `balloon: 0` is NOT how you disable this. That was tried
+    # first on 2026-08-16 and the balloons re-inflated within the hour.
+    # pvestatd reads 0 as "minimum zero", i.e. free to squeeze the guest all
+    # the way down, which is the opposite of the intent. Only setting
+    # `balloon` EQUAL to `memory` leaves auto-ballooning no room to act, which
+    # is what these values produce.
+    #
+    # The trigger is host-level: Proxmox auto-balloons once the host passes
+    # ~80% memory use, and this host sits almost exactly there (103GB of
+    # 128GB) with all VMs running. So the balloons will keep re-inflating
+    # forever unless min == max. If more host headroom is ever needed, lower
+    # `memory` and reboot the guest -- do not reintroduce a floor.
     memory_min = optional(number, 6144)
     # Per-node golden-image override; null means use var.template_vm_id.
     # Set this on ONE node to rebuild it onto a new image, then clear it once

@@ -29,9 +29,12 @@ variable "template_vm_id" {
 }
 
 variable "kubernetes_version" {
-  description = "kubeadm/kubelet/kubectl minor version to pin, e.g. 1.30"
+  description = "kubeadm/kubelet/kubectl minor version to pin, e.g. 1.34"
   type        = string
-  default     = "1.30"
+  # Tracks the live cluster, which reached 1.34 on 2026-08-17. The image must
+  # never LEAD the cluster by more than one minor: kubelet may not be newer
+  # than kube-apiserver, so a node built from a too-new image cannot join.
+  default     = "1.34"
 }
 
 variable "ubuntu_point_release" {
