@@ -43,10 +43,21 @@
         remote_src: true
   become: true
 
+# force_update makes this idempotent.
+#
+# Without it, kubernetes.core.helm_repository FAILS outright when the repo is
+# already present ("Repository already have a repository named cilium"), which
+# meant `ansible-playbook playbook.yml --tags cni` could only ever succeed on a
+# host that had never run it. The role aborted here before reaching the Helm
+# upgrade below, so re-runs silently did nothing at all -- despite
+# docs/runbook.md promising every stage is independently re-runnable.
+#
+# Hit for real on k8s-master-2 on 2026-09-13 while enabling Hubble.
 - name: Add Cilium Helm repo
   kubernetes.core.helm_repository:
     name: cilium
     repo_url: https://helm.cilium.io/
+    force_update: true
   become: false
   environment:
     KUBECONFIG: /home/ansible/.kube/config
@@ -76,6 +87,23 @@
 # cilium_upgrade_compatibility preserves datapath behaviour across a minor
 # bump and should name the minor the cluster was last running, not the
 # target. Leave it unset for a fresh install or a patch-level bump.
+# Hubble relay + UI are enabled deliberately.
+#
+# The agent has always had enable-hubble=true (chart default), so per-node flow
+# data was being collected -- but with no relay there was no way to query it
+# across the cluster, and no UI. That made it impossible to see what actually
+# talks to what, which is the prerequisite for writing NetworkPolicy that does
+# not break things.
+#
+# Added 2026-09-13 as step 1 of finishing the NetworkPolicy work: today the
+# cluster has ingress-only policies on 16 of 28 running namespaces and no
+# egress policy at all, so a compromised pod can still reach Vault, the Ceph
+# mons and the API server.
+#
+# Not exposed through Traefik on purpose -- reach the UI with
+#   kubectl -n kube-system port-forward svc/hubble-ui 12000:80
+# Publishing it would need auth in front of it, and it shows every flow in the
+# cluster.
 - name: Install or upgrade Cilium CNI
   kubernetes.core.helm:
     name: cilium
@@ -93,6 +121,11 @@
           'kubeProxyReplacement': true,
           'k8sServiceHost': control_plane_endpoint.split(':')[0],
           'k8sServicePort': control_plane_endpoint.split(':')[1],
+          'hubble': {
+            'enabled': true,
+            'relay': {'enabled': true},
+            'ui': {'enabled': true},
+          },
         }
         | combine(
             {'upgradeCompatibility': cilium_upgrade_compatibility}
