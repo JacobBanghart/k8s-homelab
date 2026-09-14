@@ -1,0 +1,44 @@
+# Ingress policy for the Vault namespace.
+#
+# Added 2026-09-13. Before this, ANY pod in ANY namespace could reach Vault's
+# API on 8200 -- it was the most sensitive namespace in the cluster and the
+# only one of its kind with no policy at all.
+#
+# Who is allowed, and why each entry is here (verified with `hubble observe
+# --to-namespace vault` before writing this, not assumed):
+#
+#   podSelector: {}   Vault's own pods. THIS ONE IS LOAD-BEARING -- vault-0/1/2
+#                     hold a Raft quorum and gossip constantly on 8201 via the
+#                     vault-internal headless service. A policy that allows the
+#                     external clients but forgets peer traffic does not just
+#                     break the API, it breaks the Raft cluster.
+#   external-secrets  The ClusterSecretStore. Observed live pulling secrets.
+#   traefik           Serves the Vault UI via clusters/k8s-homelab/vault/ingressroute.yaml.
+#   monitoring        No ServiceMonitor exists in this namespace today, so this
+#                     is not strictly required -- included to match the house
+#                     pattern used by every app namespace and so that adding
+#                     one later does not silently fail to scrape.
+#
+# Ingress-only on purpose, consistent with the rest of the cluster. Egress
+# restrictions are a separate piece of work; see the Cilium note in the vault.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: vault-allow
+  namespace: vault
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector: {}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: external-secrets
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: traefik
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
