@@ -20,6 +20,21 @@ spec:
     storageClass: ceph-block
     size: 2Gi
 
+  # Same guard as flux's authentik-postgres (see its postgres-cluster.yaml
+  # and monitoring/cnpg-alerts.yaml here). A standby stuck on a diverged
+  # timeline after a failover leaves an inactive HA slot that pins WAL
+  # forever; authentik-postgres hit that 2026-09-20 and -25. On 2Gi that
+  # would fill the volume in hours, so cap what a slot can hold (the
+  # standby then needs `kubectl cnpg destroy grafana-postgres <n>`).
+  # archive_timeout: CNPG's 5min default forces a new 16MB segment every
+  # 5 minutes (~4.6GB/day) for the benefit of a WAL archive, and there is
+  # none (no spec.backup). 1h cuts that to what's actually written. Put it
+  # back down if Barman/PITR archiving is ever added.
+  postgresql:
+    parameters:
+      max_slot_wal_keep_size: "512MB"
+      archive_timeout: "1h"
+
   resources:
     requests:
       cpu: "50m"
