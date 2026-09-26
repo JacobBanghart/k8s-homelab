@@ -57,26 +57,34 @@ cluster runs GitHub Actions jobs for a repo you don't own
 tie k8s kernel requirements to Proxmox kernel upgrades. Once passthrough is
 gone, a VM with free-page reporting gets most of the elasticity anyway.
 
-## Phase 0: make room on the host (old cluster, ~1 evening)
+## Phase 0: make room on the host (DONE 2026-09-26)
 
-The new VM must run next to the old cluster during migration; only ~14
-GiB is free today.
+What was actually done (host `available` went 14 → 36 GiB):
 
-1. **flux repo:** `github-runner/runners.yaml`: ferrix-runner request 1Gi
-   → 256Mi, dind 256Mi → 64Mi (idle use is ~115 Mi). Frees ~10 GiB of
-   requests. *(Decide concurrency, see Open decisions.)*
-2. **This repo:** Grafana 3 → 1 (drop the DoNotSchedule topology spread),
-   Traefik 3 → 1.
-3. **Terraform:** masters 6144 → 4096, workers 24576 → 16384. The VMs need
-   a reboot to apply; do one at a time and wait for `ceph -s` HEALTH_OK and
-   etcd healthy between nodes. **First reconcile drift:** 9112/9113 have
-   `balloon` 20480/19456 set by hand while Terraform says 24576.
-4. Expected host free: ~14 + 6 + 24 ≈ **44 GiB**.
+1. **flux `c03e574`:** ferrix-runner requests 1Gi/256Mi → 512Mi/128Mi
+   (runner/dind). 6.4 GiB across the pool = the observed 15d peak.
+2. **Terraform:** masters 6144 → 4608, workers 24576 → 18432 (`memory_min`
+   equal). Applied one VM at a time with `-target` (bpg's
+   `reboot_after_update` would otherwise reboot all six at once). Workers
+   were drained first, with `ceph osd set noout` for the duration. Also fixed
+   drift: master disks live on `etcd-fast` (moved by hand), so there is a new
+   `master_disk_pool` var. Otherwise Terraform wanted to move them back to
+   `nvme`.
+3. **Not 16 GiB workers:** Prometheus showed worker-0 peaking at 17.1 GiB
+   real use on 2026-09-13 (homestead 8.9 GiB + Ceph 3.8 GiB on one node).
+4. **`osd_memory_target` 4 → 2 GiB** via `ceph config set` (not in git; Ceph
+   is going away) so the homestead node keeps headroom at 18 GiB.
+5. **Traefik/Grafana stay at 3 on the old cluster.** Their replicas exist to
+   survive node drains, and they only save ~1 GiB. They go to 1 on the new
+   cluster.
+
+With ~36 GiB free, build the new VM at **32 GiB** and raise it to 40 GiB in
+Phase 6 once the old VMs are gone (one reboot).
 
 ## Phase 1: build the node (no impact on the old cluster)
 
 1. **Terraform:** new `vms-single.tf` + `var.single_node` (VMID 9121, VLAN
-   30, new IP e.g. 10.4.0.30, 32c/40 GiB, `memory_min` = `memory`, 200 GB
+   30, new IP e.g. 10.4.0.30, 32c/32 GiB (→ 40 in Phase 6), `memory_min` = `memory`, 200 GB
    `scsi0` with `discard=on`, `ssd=1`, `iothread=1`). **Do not shrink the
    existing `masters`/`workers` maps.** Terraform would destroy the live
    VMs. Stage the disk on `etcd-fast` (nvme4n1, 3.7 TB free); it moves to

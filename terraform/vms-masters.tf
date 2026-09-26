@@ -31,7 +31,7 @@ resource "proxmox_virtual_environment_vm" "master" {
   }
 
   disk {
-    datastore_id = var.storage_pool
+    datastore_id = var.master_disk_pool
     interface    = "scsi0"
     size         = 40
   }

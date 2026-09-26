@@ -28,6 +28,12 @@ variable "template_vm_id" {
   default     = 9000
 }
 
+variable "master_disk_pool" {
+  description = "Proxmox storage for master root disks. Masters were moved to the dedicated 990 Pro (etcd-fast) by hand for etcd fsync latency; this keeps Terraform from moving them back."
+  type        = string
+  default     = "etcd-fast"
+}
+
 variable "storage_pool" {
   description = "Proxmox storage pool for VM disks"
   type        = string
@@ -63,7 +69,7 @@ variable "masters" {
     ip     = string
     vm_id  = number
     cores  = optional(number, 6)
-    memory = optional(number, 6144)
+    memory = optional(number, 4608)
     # Ballooning floor -- now set EQUAL to `memory`, which disables ballooning.
     #
     # The old comment here had the hazard right but the mitigation wrong. It
@@ -100,7 +106,7 @@ variable "masters" {
     # 128GB) with all VMs running. So the balloons will keep re-inflating
     # forever unless min == max. If more host headroom is ever needed, lower
     # `memory` and reboot the guest -- do not reintroduce a floor.
-    memory_min = optional(number, 6144)
+    memory_min = optional(number, 4608)
     # Per-node golden-image override; null means use var.template_vm_id.
     # Set this on ONE node to rebuild it onto a new image, then clear it once
     # the fleet has caught up. Never bump var.template_vm_id itself -- it is
@@ -134,7 +140,7 @@ variable "workers" {
     # cache; this one is derived from scheduler requests. Re-check it the same
     # way (`kubectl describe nodes | grep -A5 "Allocated resources"`) before
     # changing it, and remember allocatable is only ~77% of guest RAM.
-    memory = optional(number, 24576)
+    memory = optional(number, 18432)
     # Set EQUAL to `memory` -- see the long note on masters.memory_min for why
     # any gap is unsafe on a Kubernetes node.
     #
@@ -147,7 +153,7 @@ variable "workers" {
     #
     # If RAM genuinely has to be returned to the host, lower `memory` and
     # reboot the guest. Do not reintroduce a floor below it.
-    memory_min = optional(number, 24576)
+    memory_min = optional(number, 18432)
     # Per-node golden-image override; null means use var.template_vm_id.
     # Set this on ONE node to rebuild it onto a new image, then clear it once
     # the fleet has caught up. Never bump var.template_vm_id itself -- it is
