@@ -35,9 +35,6 @@ Quickstart below for the actual step-by-step build.
 ```
 packer/      golden VM image definition
 terraform/   VM provisioning (clones of the Packer template)
-             Also holds a few non-cluster one-off guests (lxc-*.tf) that
-             live here only because this module already owns the Proxmox
-             provider, API token and state -- see docs/agent-sandbox.md
 ansible/     OS config + kubeadm cluster bootstrap
 unifi/       UniFi VLAN + firewall isolation for the cluster's network
 clusters/    Flux GitOps config for this cluster (kubectl context k8s-homelab)
