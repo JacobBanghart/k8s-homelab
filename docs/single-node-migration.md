@@ -199,7 +199,9 @@ Replacement:
 6. Repo cleanup: delete `clusters/k8s-homelab{,-config}` here and
    `clusters/k8s-homelab-apps` + stale `apps/github-runners` in flux; update
    README ("single-node"), `architecture.md`, and add a decisions.md entry
-   superseding "3 masters" and "Rook/Ceph".
+   superseding "3 masters" and "Rook/Ceph". Update the Obsidian notes
+   `Infrastructure/k8s-homelab.md` and `Infrastructure/Backup Strategy.md`
+   (the latter documents the Ceph backup job and restore steps in detail).
 
 ## Open decisions
 
