@@ -8,14 +8,34 @@
     path: /etc/kubernetes/admin.conf
   register: admin_conf
 
+# kubeadm_init_config (group_vars) switches init to a config file, for
+# settings with no CLI flag -- the single-node inventory uses it for
+# taints: [], skipping kube-proxy and kubelet reservations. Unset, the
+# original flag-based init below runs unchanged.
+- name: Write kubeadm init config
+  ansible.builtin.copy:
+    content: "{{ kubeadm_init_config }}"
+    dest: /etc/kubernetes/kubeadm-init.yaml
+    mode: "0600"
+  when: kubeadm_init_config | default('', true) | length > 0
+
+- name: Run kubeadm init (config file)
+  ansible.builtin.command: kubeadm init --config /etc/kubernetes/kubeadm-init.yaml --upload-certs
+  when:
+    - not admin_conf.stat.exists
+    - kubeadm_init_config | default('', true) | length > 0
+  register: kubeadm_init_result
+
 - name: Run kubeadm init
   ansible.builtin.command: >
     kubeadm init
     --control-plane-endpoint={{ control_plane_endpoint }}
     --upload-certs
     --pod-network-cidr={{ pod_network_cidr }}
-  when: not admin_conf.stat.exists
-  register: kubeadm_init_result
+  when:
+    - not admin_conf.stat.exists
+    - kubeadm_init_config | default('', true) | length == 0
+  register: kubeadm_init_result_flags
 
 - name: Create .kube directory for the ansible user
   ansible.builtin.file:
@@ -58,7 +78,7 @@
     content: |
       WORKER_JOIN_COMMAND="{{ worker_join_command.stdout }}"
       CONTROL_PLANE_JOIN_COMMAND="{{ cp_join_command.stdout }}"
-    dest: "{{ playbook_dir }}/.join-commands.sh"
+    dest: "{{ playbook_dir }}/.join-commands{{ join_commands_suffix | default('') }}.sh"
     mode: "0600"
   delegate_to: localhost
   become: false

@@ -15,7 +15,7 @@ packer/*.auto.pkrvars.hcl
 
 # Ansible
 ansible/*.retry
-ansible/.join-commands.sh
+ansible/.join-commands*.sh
 ansible/inventory/host_vars/*.yml
 !ansible/inventory/host_vars/*.example.yml
 

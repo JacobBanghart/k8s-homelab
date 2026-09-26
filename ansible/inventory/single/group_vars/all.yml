@@ -1,0 +1,154 @@
+---
+# group_vars for the SINGLE-NODE cluster (inventory/single). Starts as a copy
+# of inventory/group_vars/all.yml; the overrides are collected at the top.
+# Keep shared values (cilium_version, oidc_*) in sync with that file until the
+# old cluster is decommissioned (docs/single-node-migration.md Phase 6), after
+# which this becomes the only copy.
+
+# --- single-node overrides -------------------------------------------------
+
+# A DNS name, not an IP: kubeadm bakes the endpoint into every kubeconfig and
+# the apiserver cert, so a name is what lets a node be added (or the IP change)
+# later without re-issuing certs -- the lesson from the old cluster's
+# "control plane endpoint: master-0's IP" entry in docs/decisions.md.
+# .internal is the IANA-reserved private TLD. Resolves via /etc/hosts
+# (roles/single_node); kubectl can use the IP, which is in certSANs.
+control_plane_endpoint: "k8s-api.homelab.internal:6443"
+control_plane_endpoint_ip: "10.4.0.30"
+
+# Exact version to install before init. The golden image (template 9001)
+# still ships 1.30.14 -- the old cluster was upgraded in place -- so
+# roles/single_node moves the apt repo to this minor and installs it. Matches
+# the old cluster so migrated workloads see the same API.
+kubernetes_version: "1.34.10"
+
+# The chart default (2) uses required anti-affinity, so the 2nd never
+# schedules on one node.
+cilium_operator_replicas: 1
+
+# Fresh install, not an upgrade.
+cilium_upgrade_compatibility: ""
+
+# Where every PersistentVolume lives (the VM's scsi1 data disk).
+# Keeps kubeadm_init from overwriting the old cluster's .join-commands.sh.
+join_commands_suffix: "-single"
+
+local_path_root: "/var/lib/local-path"
+data_disk_device: "/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_drive-scsi1"
+
+# Consumed by roles/kubeadm_init in place of its command-line flags.
+kubeadm_init_config: |
+  apiVersion: kubeadm.k8s.io/v1beta4
+  kind: InitConfiguration
+  localAPIEndpoint:
+    advertiseAddress: {{ control_plane_endpoint_ip }}
+  nodeRegistration:
+    # Empty list = no control-plane taint: this node runs the workloads too.
+    taints: []
+  # Cilium runs with kubeProxyReplacement=true, so kube-proxy is redundant
+  # (the old cluster ran both).
+  skipPhases:
+    - addon/kube-proxy
+  ---
+  apiVersion: kubeadm.k8s.io/v1beta4
+  kind: ClusterConfiguration
+  kubernetesVersion: v{{ kubernetes_version }}
+  controlPlaneEndpoint: {{ control_plane_endpoint }}
+  networking:
+    podSubnet: {{ pod_network_cidr }}
+  apiServer:
+    certSANs:
+      - {{ control_plane_endpoint.split(':')[0] }}
+      - {{ control_plane_endpoint_ip }}
+      # The old keepalived VIP, so it can be re-pointed here after Phase 6.
+      - 10.4.0.5
+  ---
+  apiVersion: kubelet.config.k8s.io/v1beta1
+  kind: KubeletConfiguration
+  # No other node to fail over to: reserve room for the OS and kubelet so
+  # a memory-hungry pod gets evicted before the kernel OOM-killer picks
+  # etcd or the apiserver.
+  systemReserved:
+    cpu: 500m
+    memory: 1Gi
+  kubeReserved:
+    cpu: 500m
+    memory: 1Gi
+  evictionHard:
+    memory.available: 500Mi
+    nodefs.available: 10%
+    imagefs.available: 10%
+  # Default 110 is per node; this one node carries everything.
+  maxPods: 200
+
+# --- copied from inventory/group_vars/all.yml -------------------------------
+# The keepalived VIP, not any single master's IP. This feeds
+# kubeadm --control-plane-endpoint and Cilium's k8sServiceHost, so pointing it
+# at a real node silently pins the whole cluster to that node: every
+# kubelet.conf, kube-proxy kubeconfig and Cilium agent then talks to it
+# directly and the VIP does nothing. Losing that one master takes every node
+# NotReady despite the other two apiservers being healthy. 10.4.0.5 is in the
+# apiserver certSANs, so it is valid to address directly.
+# control_plane_endpoint: overridden above
+pod_network_cidr: "10.42.0.0/16"
+# Cilium is the binding constraint on how far Kubernetes can be upgraded --
+# each Cilium minor supports a bounded Kubernetes range:
+#
+#   Cilium 1.16   k8s 1.27-1.30
+#   Cilium 1.17   k8s 1.29-1.32
+#   Cilium 1.18   k8s 1.30-1.33
+#   Cilium 1.19   k8s 1.32-1.35
+#   Cilium 1.20   k8s 1.33-1.36
+#
+# The cluster sat on Cilium 1.16.5 with Kubernetes 1.30.14 -- i.e. already at
+# the TOP of 1.16's supported range, so Cilium had to move before Kubernetes
+# could. Bumped to the latest 1.16 patch first because Cilium's upgrade guide
+# requires reaching the latest patch of the current minor before a minor bump.
+cilium_version: "1.19.6"
+
+# Set to the minor the cluster is upgrading FROM (e.g. "1.16") during a minor
+# Cilium upgrade; it preserves datapath behaviour across the bump. Leave empty
+# for a fresh install or a patch-level bump.
+# cilium_upgrade_compatibility: overridden above
+
+# Floating VIP for the control plane, failover-only via keepalived (no
+# load-balancing across masters -- matches the same failover-only model
+# used for MetalLB). Outside VLAN 30's DHCP range (.6-.199) and outside
+# the MetalLB pool (.200-.220).
+control_plane_vip: "10.4.0.5"
+control_plane_vip_interface: "eth0"
+control_plane_vip_router_id: 51
+# VRRP auth is a legacy/weak mechanism (deprecated in the RFC, kept only
+# for interop) -- not a real secret, just here to stop stray VRRP traffic
+# on the same VLAN from a different project interfering.
+control_plane_vip_auth_pass: "k8shomelab-vrrp"
+
+# PERSONALIZE: gates the control_plane_oidc role (see its tasks/main.yml).
+# Defaults to true so this deployment's own re-runs of the playbook keep
+# working unchanged -- if you're standing up your own cluster, set this to
+# `false` in your own inventory/group_vars override until you've set up your
+# own OIDC provider and replaced the two values below, otherwise a plain
+# `ansible-playbook playbook.yml` run will point your kube-apiserver at an
+# issuer you don't control (which can crash-loop it if unreachable).
+oidc_enabled: true
+
+# PERSONALIZE: this deployment's own Authentik application. These used to be
+# hardcoded inside control_plane_oidc; they were lifted out here on
+# 2026-08-16 when that role was rewritten to drive the kubeadm-config
+# ClusterConfiguration instead of editing the static pod manifest, so that
+# forking the repo no longer means editing role internals.
+#
+# Neither value is a secret: the issuer URL is public, and an OIDC client_id
+# is an identifier rather than a credential (the apiserver only *validates*
+# tokens here, it never authenticates as this client).
+oidc_issuer_url: "https://auth.jacobbanghart.com/application/o/headlamp/"
+oidc_client_id: "BPpp9hCaFCjhfY9C8xOU5AvVYWcRCkjXVU3VeZIH"
+
+# PERSONALIZE: gates the split_horizon_dns role, whose defaults/main.yml
+# lists this deployment's own public hostnames and Traefik VIP. Defaults to
+# true for this deployment's own re-runs; set it to `false` in your own
+# inventory override until you've replaced that hostname list with yours,
+# otherwise CoreDNS will answer for names you don't serve at an address you
+# don't own. Only affects resolution inside the cluster -- public DNS
+# records (published by external-dns at the WAN address) are untouched.
+split_horizon_dns_enabled: true

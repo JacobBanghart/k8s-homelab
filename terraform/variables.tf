@@ -123,8 +123,8 @@ variable "masters" {
 variable "workers" {
   description = "Worker node definitions: hostname => static IP (no CIDR)"
   type = map(object({
-    ip     = string
-    vm_id  = number
+    ip    = string
+    vm_id = number
     cores = optional(number, 20)
     # 24GiB, up from 15GiB (2026-08-15). 15GiB was set on 2026-08-09 against
     # 25.8GiB of cluster-wide pod requests, which left room to evacuate a node.
@@ -182,3 +182,44 @@ variable "node_root_disk_size" {
 # the scsi1/scsi2 disk blocks in vms-workers.tf. Ceph OSDs are now backed by a
 # PCIe-passthrough Samsung 990 PRO 4TB per worker rather than virtual disks
 # carved out of the hypervisor's single Solidigm NVMe. See vms-workers.tf.
+
+variable "single_node" {
+  description = <<-EOT
+    The single-node kubeadm VM that replaces the 3+3 cluster
+    (docs/single-node-migration.md). Lives alongside var.masters/var.workers
+    during the migration -- do NOT shrink those maps until Phase 6, Terraform
+    would destroy the live cluster.
+
+    No hostpci: passthrough makes QEMU pin every byte of guest RAM, which is
+    what stranded ~50 GiB on the old workers. memory_min == memory keeps the
+    balloon device (so free-page-reporting returns freed pages to the host)
+    without ever inflating it under kubelet (see the masters.memory_min note).
+  EOT
+  type = object({
+    name           = string
+    ip             = string
+    vm_id          = number
+    template_vm_id = number
+    cores          = number
+    memory         = number
+    memory_min     = number
+    root_disk_size = number
+    data_disk_size = number
+    datastore_id   = string
+  })
+  default = {
+    name           = "k8s-homelab-0"
+    ip             = "10.4.0.30"
+    vm_id          = 9121
+    template_vm_id = 9001
+    cores          = 32
+    # 32 GiB during migration (host headroom), 40 GiB after Phase 6.
+    memory         = 32768
+    memory_min     = 32768
+    root_disk_size = 100
+    # local-path PV root. Staged on etcd-fast (spare 990 Pro); moves to the
+    # host ZFS pool in Phase 6 via `qm disk move`.
+    data_disk_size = 1000
+    datastore_id   = "etcd-fast"
+  }
+}

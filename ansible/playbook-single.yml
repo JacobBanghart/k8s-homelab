@@ -1,0 +1,76 @@
+---
+# Single-node cluster: control plane + workloads on one VM.
+#   ansible-playbook -i inventory/single/hosts.ini playbook-single.yml
+# Same roles as playbook.yml minus the multi-node stages (join-masters,
+# join-workers, control-plane-vip), plus single_node prep before init.
+# See docs/single-node-migration.md.
+
+- name: Common OS config
+  hosts: k8s_cluster
+  become: true
+  tags: [common]
+  roles:
+    - common
+
+- name: Containerd drift correction
+  hosts: k8s_cluster
+  become: true
+  tags: [containerd]
+  roles:
+    - containerd
+
+- name: Single-node prep (endpoint name, pinned kube packages, data disk)
+  hosts: control_plane_init
+  become: true
+  tags: [single-node]
+  roles:
+    - single_node
+
+- name: Initialize the control plane
+  hosts: control_plane_init
+  become: true
+  tags: [kubeadm-init]
+  roles:
+    - kubeadm_init
+
+- name: Install CNI
+  hosts: control_plane_init
+  become: true
+  tags: [cni]
+  roles:
+    - cni
+
+- name: Install metrics-server
+  hosts: control_plane_init
+  become: true
+  tags: [metrics-server]
+  roles:
+    - metrics_server
+
+- name: Expose control-plane component metrics for Prometheus
+  hosts: masters
+  become: true
+  tags: [control-plane-metrics]
+  roles:
+    - control_plane_metrics
+
+- name: Trust Authentik as an OIDC issuer on kube-apiserver
+  hosts: masters
+  become: true
+  tags: [control-plane-oidc]
+  roles:
+    - { role: control_plane_oidc, when: oidc_enabled }
+
+- name: Split-horizon DNS for this cluster's own public hostnames
+  hosts: masters
+  become: true
+  tags: [split-horizon-dns]
+  roles:
+    - { role: split_horizon_dns, when: split_horizon_dns_enabled }
+
+- name: Security-only automatic OS patching
+  hosts: k8s_cluster
+  become: true
+  tags: [unattended-upgrades]
+  roles:
+    - unattended_upgrades

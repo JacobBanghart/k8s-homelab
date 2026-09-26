@@ -1,0 +1,86 @@
+---
+# Single-node prep, run before kubeadm_init (playbook-single.yml).
+# Idempotent: safe to re-run against a bootstrapped node.
+
+# --- control-plane endpoint name -------------------------------------------
+# Resolves the endpoint for the node itself and for hostNetwork pods (kubelet
+# mounts the node's /etc/hosts into them), which is everything that talks to
+# the apiserver by name: kubelet, controller-manager, scheduler, Cilium.
+- name: Resolve the control-plane endpoint name locally
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: '\s{{ control_plane_endpoint.split(":")[0] | regex_escape }}$'
+    line: "{{ control_plane_endpoint_ip }} {{ control_plane_endpoint.split(':')[0] }}"
+
+# --- Kubernetes packages ----------------------------------------------------
+# The golden image pins an older minor. pkgs.k8s.io has one repo per minor, so
+# move the source to kubernetes_version's minor, then install that exact
+# version and hold it (upgrades stay deliberate, per docs/runbook.md).
+- name: Set kubernetes minor
+  ansible.builtin.set_fact:
+    k8s_minor: "{{ kubernetes_version.split('.')[0:2] | join('.') }}"
+
+- name: Fetch the pkgs.k8s.io signing key for this minor
+  ansible.builtin.shell: |
+    curl -fsSL https://pkgs.k8s.io/core:/stable:/v{{ k8s_minor }}/deb/Release.key \
+      | gpg --dearmor --yes -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+  args:
+    creates: /etc/apt/keyrings/.k8s-key-v{{ k8s_minor }}
+  register: k8s_key
+
+- name: Mark key as fetched for this minor
+  ansible.builtin.file:
+    path: /etc/apt/keyrings/.k8s-key-v{{ k8s_minor }}
+    state: touch
+  when: k8s_key is changed
+
+- name: Point apt at the kubernetes minor repo
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/kubernetes.list
+    content: |
+      deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v{{ k8s_minor }}/deb/ /
+    mode: "0644"
+
+- name: Check installed kubeadm version
+  ansible.builtin.command: kubeadm version -o short
+  register: kubeadm_ver
+  changed_when: false
+
+- name: Install pinned kubeadm/kubelet/kubectl
+  when: kubeadm_ver.stdout != 'v' ~ kubernetes_version
+  block:
+    - name: Unhold kube packages
+      ansible.builtin.command: apt-mark unhold kubeadm kubelet kubectl
+    - name: Install kube packages {{ kubernetes_version }}
+      ansible.builtin.apt:
+        name:
+          - "kubeadm={{ kubernetes_version }}-*"
+          - "kubelet={{ kubernetes_version }}-*"
+          - "kubectl={{ kubernetes_version }}-*"
+        update_cache: true
+        allow_downgrade: false
+    - name: Hold kube packages
+      ansible.builtin.command: apt-mark hold kubeadm kubelet kubectl
+
+# --- data disk for PersistentVolumes -----------------------------------------
+- name: Create filesystem on the data disk (only if blank)
+  community.general.filesystem:
+    dev: "{{ data_disk_device }}"
+    fstype: ext4
+    opts: -L k8s-data -m 0
+
+- name: Mount the data disk at the local-path root
+  ansible.posix.mount:
+    path: "{{ local_path_root }}"
+    src: LABEL=k8s-data
+    fstype: ext4
+    # Guest fstrim.timer (Ubuntu default, weekly) passes discards to the
+    # sparse image; no continuous `discard` mount option needed.
+    opts: defaults,noatime
+    state: mounted
+
+- name: local-path root permissions
+  ansible.builtin.file:
+    path: "{{ local_path_root }}"
+    state: directory
+    mode: "0755"
