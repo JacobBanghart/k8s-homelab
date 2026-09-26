@@ -1,0 +1,439 @@
+# PERSONALIZE: this file has several of this deployment's own values you
+# need to replace before applying to your fork -- grafana.k8s-homelab.
+# jacobbanghart.com (root_url/ingress hosts), auth.jacobbanghart.com plus
+# the Authentik client_id (OIDC provider URLs, not portable regardless),
+# and jacobmbanghart@gmail.com in role_attribute_path (pins Grafana Admin
+# to this specific email).
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: kube-prometheus-stack
+  namespace: monitoring
+spec:
+  interval: 10m
+  chart:
+    spec:
+      chart: kube-prometheus-stack
+      version: "87.12.2"
+      sourceRef:
+        kind: HelmRepository
+        name: prometheus-community
+        namespace: monitoring
+  install:
+    crds: CreateReplace
+    remediation:
+      retries: 3
+  upgrade:
+    crds: CreateReplace
+    remediation:
+      retries: 3
+  values:
+    # kubeadm bound kube-scheduler/kube-controller-manager/etcd metrics to
+    # 127.0.0.1 by default (security hardening in modern kubeadm), which
+    # made these ServiceMonitors sit permanently "down". Fixed 2026-07-09
+    # by patching the static pod manifests on all 3 masters to bind
+    # 0.0.0.0 (ansible/roles/control_plane_metrics/) -- see
+    # docs/decisions.md for the writeup. kubeProxy stays disabled: same
+    # bind issue, but also moot since this cluster runs Cilium with
+    # kube-proxy-replacement=true, so its metrics aren't meaningful here
+    # regardless of reachability.
+    kubeProxy:
+      enabled: false
+
+    alertmanager:
+      alertmanagerSpec:
+        replicas: 1
+        retention: 120h
+        # Mounts at /etc/alertmanager/secrets/alertmanager-smtp/MAIL_PASSWORD.
+        # See alertmanager-smtp-externalsecret.yaml for why the credential is
+        # borrowed from the invoice-ninja Vault path.
+        secrets:
+          - alertmanager-smtp
+        storage:
+          volumeClaimTemplate:
+            spec:
+              storageClassName: local-path
+              accessModes: ["ReadWriteOnce"]
+              resources:
+                requests:
+                  storage: 2Gi
+        resources:
+          requests:
+            cpu: "50m"
+            memory: "64Mi"
+          limits:
+            cpu: "200m"
+            memory: "128Mi"
+
+      # Until 2026-08-16 this was the chart default, which is
+      # `receiver: "null"` for everything -- 153 loaded alert rules (40
+      # critical, 104 warning) all discarded, and the only thing ever firing
+      # was Watchdog, into nothing. Every incident this cluster has had was
+      # found by looking, not by being told.
+      #
+      # The routing below is deliberately allowlist-shaped rather than
+      # "critical goes to email": the top-level receiver stays "null", and
+      # mail is only reached by an explicit matching route. A rule that is
+      # noisy on a 6-node homelab therefore costs nothing until someone opts
+      # it in, and the default for anything newly added by a chart upgrade is
+      # silence rather than a 3am page.
+      #
+      # Alertmanager takes the FIRST matching route, so the suppressions have
+      # to come before the severity=critical catch-all.
+      config:
+        global:
+          resolve_timeout: 5m
+          smtp_from: alerts@jacobbanghart.com
+          smtp_smarthost: smtp.mx.cloudflare.net:465
+          smtp_auth_username: api_token
+          smtp_auth_password_file: /etc/alertmanager/secrets/alertmanager-smtp/MAIL_PASSWORD
+          # 465 (implicit TLS), matching what invoice-ninja already uses.
+          #
+          # This was briefly set to 587 on the assumption that Alertmanager
+          # needs STARTTLS. It does not work: smtp.mx.cloudflare.net is an
+          # inbound MX host, and probing it on 2026-08-16 showed 587 accepts
+          # a TCP connection and then never sends a banner, so Alertmanager
+          # failed with "create SMTP client: read: connection reset by peer"
+          # and retried 11 times. Only 25 (plaintext) and 465 (implicit TLS)
+          # actually speak SMTP.
+          #
+          # A plain TCP reachability check is NOT sufficient to validate this
+          # -- `nc -z` reported all four of 25/465/587/2525 open. The port has
+          # to be made to produce a 220 greeting.
+          #
+          # require_tls stays false because Alertmanager special-cases port
+          # 465 and dials TLS directly; the connection is already encrypted,
+          # and asking for STARTTLS on top of it is what this flag would do.
+          smtp_require_tls: false
+
+        route:
+          group_by: ["alertname", "namespace"]
+          # Deliberately slow. A rollout or a node reboot produces a burst of
+          # correlated alerts; waiting a minute to group them turns a dozen
+          # mails into one, and 24h repeat means an unresolved-but-known
+          # problem nags once a day rather than twice an hour.
+          group_wait: 1m
+          group_interval: 10m
+          repeat_interval: 24h
+          receiver: "null"
+
+          routes:
+            # --- suppressions (must precede the catch-all) ---------------
+            # Watchdog fires permanently by design as a dead-man's switch,
+            # and InfoInhibitor exists only to feed the inhibit_rules below.
+            # Neither is an event.
+            - receiver: "null"
+              matchers:
+                - alertname =~ "Watchdog|InfoInhibitor"
+
+            # KubeAPIErrorBudgetBurn is an SLO burn-rate alert tuned for
+            # clusters with real traffic. On six nodes any brief apiserver
+            # blip -- including a control-plane rollout we triggered
+            # ourselves -- burns enough of a tiny error budget to page.
+            #
+            # The KubeStateMetrics sharding alerts compare shard counts
+            # across replicas; kube-state-metrics runs a single replica here,
+            # so they are structurally false.
+            - receiver: "null"
+              matchers:
+                - alertname =~ "KubeAPIErrorBudgetBurn|KubeStateMetricsShardingMismatch|KubeStateMetricsShardsMissing"
+
+            # etcd latency thresholds assume dedicated etcd disks. These
+            # masters share NVMe with everything else, so fsync and gRPC
+            # latency alerts are chronic rather than informative. The etcd
+            # alerts that indicate actual failure -- NoLeader,
+            # InsufficientMembers, DatabaseQuotaLowSpace, failed gRPC -- are
+            # NOT suppressed and still reach mail via the critical route.
+            - receiver: "null"
+              matchers:
+                - alertname =~ "etcdGRPCRequestsSlow|etcdHighFsyncDurations"
+
+            # --- things worth an email ----------------------------------
+            - receiver: email
+              matchers:
+                - severity = critical
+
+            # Warning-severity rules that have each already corresponded to a
+            # real outage on this cluster, so they earn their place:
+            #
+            #   KubeContainerWaiting          the RWO Multi-Attach deadlock --
+            #                                 a pod stuck ContainerCreating
+            #                                 forever with nothing reporting it
+            #   KubeDeploymentReplicasMismatch the grafana rollout that sat
+            #                                 stalled for 5 days unnoticed
+            #   KubeNodeNotReady              the OOM kill that took
+            #                                 k8s-worker-2 out
+            #   CephHealth*                   added by ceph-alerts.yaml; there
+            #                                 were no Ceph rules at all before
+            - receiver: email
+              matchers:
+                - alertname =~ "KubeNodeNotReady|KubeNodeUnreachable|KubePodCrashLooping|KubeContainerWaiting|KubeDeploymentReplicasMismatch|KubeStatefulSetReplicasMismatch|KubePersistentVolumeFillingUp|TargetDown|CephHealthWarning|CephOSDDiskNotResponding|CephMonQuorumLow|CephClusterNearFull"
+
+        receivers:
+          - name: "null"
+          - name: email
+            email_configs:
+              - to: jacobmbanghart@gmail.com
+                send_resolved: true
+                headers:
+                  Subject: '{{ if eq .Status "firing" }}[FIRING {{ .Alerts.Firing | len }}]{{ else }}[RESOLVED]{{ end }} {{ .CommonLabels.alertname }} {{ .CommonLabels.namespace }}'
+
+        # Keep the chart's inhibition behaviour: a critical alert silences the
+        # matching warning/info for the same namespace+alertname, so one
+        # incident does not arrive as three mails at three severities.
+        inhibit_rules:
+          - source_matchers: ["severity = critical"]
+            target_matchers: ["severity =~ warning|info"]
+            equal: ["namespace", "alertname"]
+          - source_matchers: ["severity = warning"]
+            target_matchers: ["severity = info"]
+            equal: ["namespace", "alertname"]
+
+    prometheus:
+      prometheusSpec:
+        retention: 15d
+        # Time-based retention alone does not protect the volume: if
+        # ingestion grows, 15d of samples can exceed 20Gi and Prometheus
+        # fills the PVC before the retention window ever triggers a
+        # deletion. retentionSize makes whichever limit is hit first win.
+        #
+        # 16GiB against a 20Gi claim leaves room for the WAL and for
+        # compaction, which needs scratch space while rewriting blocks --
+        # sizing this at or near the volume capacity is how you turn a
+        # disk-full into a wedged TSDB that needs manual block deletion.
+        retentionSize: 16GiB
+        storageSpec:
+          volumeClaimTemplate:
+            spec:
+              storageClassName: local-path
+              accessModes: ["ReadWriteOnce"]
+              resources:
+                requests:
+                  storage: 20Gi
+        # 1Gi was not enough headroom for ~179k head series: peak working
+        # set sat at 974Mi/1024Mi (95%), so Go's GC ran continuously. That
+        # starved the long-range recording rules -- the kube-apiserver
+        # burnrate/availability groups (30d, 3d, 6h windows) failed with
+        # "expanding series: context deadline exceeded" -- and stalled the
+        # HTTP handler past the 3s probe timeout, producing recurring
+        # Readiness/Liveness probe failures on the prometheus pod.
+        #
+        # It was never OOMKilled and never CPU-throttled (measured
+        # throttle ratio 0), which is why this looked like a hang rather
+        # than a crash. Grazing the ceiling, not crossing it.
+        resources:
+          requests:
+            cpu: "200m"
+            memory: "512Mi"
+          limits:
+            cpu: "1000m"
+            memory: "2Gi"
+
+    grafana:
+      admin:
+        existingSecret: grafana-admin-credentials
+        userKey: admin-user
+        passwordKey: admin-password
+      # At least 1 replica per worker node for node-drain resilience --
+      # see docs/decisions.md, 2026-07-21 entry. This only works because
+      # state now lives in grafana-postgres (CNPG, see
+      # clusters/k8s-homelab-config/cnpg/) instead of the local RWO
+      # local-path PVC below -- with local RWO storage, multiple
+      # replicas would hit the exact same Multi-Attach deadlock the
+      # original single-replica Recreate workaround was protecting
+      # against, just permanently instead of only during rollouts.
+      #
+      # topologySpreadConstraints, not a required podAntiAffinity rule
+      # (same pattern traefik/release.yaml already uses) -- anti-affinity
+      # would cap this at *exactly* one pod per node, so replicas beyond
+      # the node count would be permanently unschedulable if this is ever
+      # scaled up. Spread balances evenly instead (3 replicas/3 nodes
+      # still lands one-per-node today) without that ceiling, and with
+      # maxSkew: 1 a rollout's temporary 4th (surge) pod still fits --
+      # 2/1/1 has skew 1 -- so maxSurge can stay at the chart default
+      # instead of needing the evict-first maxUnavailable workaround a
+      # hard anti-affinity rule would require.
+      #
+      # Key is deploymentStrategy, not strategy -- the latter is a
+      # different (unrelated) top-level key elsewhere in this chart's
+      # values tree and silently no-ops if used here instead.
+      replicas: 1
+      deploymentStrategy:
+        type: RollingUpdate
+        rollingUpdate:
+          maxSurge: 1
+          maxUnavailable: 0
+      # OIDC via Authentik. client_id isn't secret (it's visible in any
+      # browser OAuth redirect anyway) so it's inline here; client_secret
+      # comes from Vault (monitoring/grafana-oidc, see
+      # grafana-oidc-externalsecret.yaml) via envValueFrom and grafana.ini's
+      # $__env{} interpolation -- never committed. See docs/decisions.md
+      # for the Authentik Provider/Application setup (web UI only, not
+      # declarative -- same as Vault's OIDC app).
+      env:
+        GF_DATABASE_TYPE: postgres
+        GF_DATABASE_HOST: grafana-postgres-rw.monitoring.svc.cluster.local:5432
+        GF_DATABASE_NAME: grafana
+        GF_DATABASE_SSL_MODE: disable
+      envValueFrom:
+        GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET:
+          secretKeyRef:
+            name: grafana-oidc
+            key: CLIENT_SECRET
+        GF_DATABASE_USER:
+          secretKeyRef:
+            name: grafana-postgres-app
+            key: username
+        GF_DATABASE_PASSWORD:
+          secretKeyRef:
+            name: grafana-postgres-app
+            key: password
+      grafana.ini:
+        server:
+          # Without this, Grafana doesn't know it's behind Traefik's TLS
+          # termination and generates OAuth redirect_uris as
+          # http://<host>:3000/... (its own internal listener address)
+          # instead of the real https public hostname -- which Authentik
+          # then rejects as a Redirect URI Error since it doesn't match
+          # what's registered on the provider.
+          root_url: https://grafana.k8s-homelab.jacobbanghart.com/
+        auth.generic_oauth:
+          enabled: true
+          name: Authentik
+          client_id: IBauVMR1df844daScBrZpG78cJHLod286S8rb6ne
+          client_secret: $__env{GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET}
+          scopes: "openid email profile"
+          auth_url: https://auth.jacobbanghart.com/application/o/authorize/
+          token_url: https://auth.jacobbanghart.com/application/o/token/
+          api_url: https://auth.jacobbanghart.com/application/o/userinfo/
+          redirect_uri: https://grafana.k8s-homelab.jacobbanghart.com/login/generic_oauth
+          # false because this Grafana is reachable from the public
+          # internet (see the ingress block below -- that is deliberate).
+          # With sign-up on, anyone who could obtain an Authentik account
+          # got a Grafana account automatically on first login; now an
+          # account has to already exist here. Existing users are
+          # unaffected -- jacob's (id=2) and the local admin (id=1) both
+          # predate this change. To onboard someone new, create their
+          # Grafana user first, then have them log in through Authentik.
+          allow_sign_up: false
+          # No role_attribute_path meant every Authentik login (including
+          # jacob's own account) got Grafana's default org role, Viewer --
+          # which can't use Explore. Pin jacob's account to Admin by email;
+          # everyone else stays Viewer.
+          role_attribute_path: "email=='jacobmbanghart@gmail.com' && 'Admin' || 'Viewer'"
+      # Disabled, not moved to RWX: with 2 replicas, a shared RWO PVC
+      # would hit the same Multi-Attach deadlock persistence was already
+      # removed to avoid (see deploymentStrategy comment above), and
+      # nothing here needs to survive a pod restart anymore -- dashboards
+      # come from ConfigMaps via the sidecar, everything else lives in
+      # grafana-postgres now.
+      persistence:
+        enabled: false
+      ingress:
+        enabled: true
+        ingressClassName: traefik
+        # DELIBERATELY PUBLIC. Published to Cloudflare at the WAN address
+        # so it's reachable off-network, and protected by Authentik OIDC
+        # with allow_sign_up: false (above) rather than by network
+        # position.
+        #
+        # This block used to carry
+        # `external-dns.alpha.kubernetes.io/exclude: "true"` under a
+        # comment claiming grafana was "internal, resolved via Pi-hole
+        # only". That annotation does not exist -- external-dns accepts
+        # the key and silently ignores it -- so grafana was published the
+        # whole time while the config asserted the opposite. Decided on
+        # 2026-08-10 to keep it public and fix the auth instead; the
+        # comment is corrected here so the next reader isn't misled.
+        #
+        # The real opt-out, if this ever should go private, is
+        # `external-dns.alpha.kubernetes.io/controller: "none"` (what
+        # vault/ and headlamp/ use). Note that withdrawing the DNS record
+        # does NOT block access: Traefik still routes to it by SNI on the
+        # WAN address, so genuinely restricting it needs an IPAllowList
+        # middleware or a separate internal entrypoint.
+        hosts:
+          - grafana.k8s-homelab.jacobbanghart.com
+        # secretName matches certificate.yaml's cert-manager Certificate
+        # (real Let's Encrypt cert via Cloudflare DNS-01). Temporary
+        # domain until this app is migrated to its real final hostname.
+        tls:
+          - secretName: grafana-tls
+            hosts:
+              - grafana.k8s-homelab.jacobbanghart.com
+      resources:
+        requests:
+          cpu: "50m"
+          memory: "128Mi"
+        limits:
+          cpu: "200m"
+          memory: "256Mi"
+      additionalDataSources:
+        - name: Loki
+          type: loki
+          access: proxy
+          url: http://loki:3100
+          isDefault: false
+      # The dashboard sidecar shipped with no requests at all, which made it
+      # BestEffort -- see the node-exporter comment below for why that
+      # matters. It is small but it is in the same eviction class as the
+      # things that keep dashboards loaded.
+      sidecar:
+        resources:
+          requests:
+            cpu: "10m"
+            memory: "48Mi"
+          limits:
+            memory: "128Mi"
+
+    # --- Resource requests on the infrastructure DaemonSets ---------------
+    #
+    # These all shipped with no requests, which makes their pods BestEffort:
+    # the FIRST QoS class the kubelet evicts under node memory pressure, and
+    # the first the kernel OOM killer picks (BestEffort pods get the highest
+    # oom_score_adj).
+    #
+    # That ordering is backwards for what these components do. This cluster
+    # has already had the kernel OOM-kill a node into NotReady when the
+    # homestead JVM grew into memory Ceph needed (see homestead.yaml in the
+    # flux repo). In that scenario node-exporter is evicted precisely when
+    # its metrics are the only way to see what happened.
+    #
+    # Requests are set from observed usage, not guesses, and limits are left
+    # generous or unset -- the point is to buy a QoS class (Burstable), not
+    # to cap these.
+    prometheus-node-exporter:
+      resources:
+        requests:
+          cpu: "10m"
+          memory: "32Mi"
+        limits:
+          memory: "128Mi"
+
+    kube-state-metrics:
+      resources:
+        requests:
+          cpu: "20m"
+          memory: "96Mi"
+        limits:
+          memory: "256Mi"
+
+    prometheusOperator:
+      resources:
+        requests:
+          cpu: "20m"
+          memory: "96Mi"
+        limits:
+          memory: "256Mi"
+      # Runs as a sidecar in both the Prometheus and Alertmanager pods. Left
+      # unrequested it dragged those pods' QoS down with it: a pod is only
+      # Guaranteed/Burstable if EVERY container has requests, so one
+      # unrequested sidecar makes the whole pod BestEffort no matter how
+      # carefully the main container is sized.
+      prometheusConfigReloader:
+        resources:
+          requests:
+            cpu: "10m"
+            memory: "32Mi"
+          limits:
+            memory: "64Mi"

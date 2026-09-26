@@ -1,0 +1,19 @@
+# Second Flux source, separate from this repo's own bootstrap
+# GitRepository. Keeps personal app workloads (specific hostnames,
+# specific GitHub repos/orgs, personal service configs) out of this
+# repo entirely, so it stays a clean "clone and run" cluster bootstrap +
+# core tooling project. If you're cloning this repo for your own
+# cluster, replace the url below with your own apps repo (or delete
+# this directory if you don't want a second source at all).
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: flux-apps
+  namespace: flux-system
+spec:
+  interval: 1m0s
+  ref:
+    branch: main
+  secretRef:
+    name: flux-apps-repo-key
+  url: ssh://git@github.com/JacobBanghart/flux

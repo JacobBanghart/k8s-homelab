@@ -1,0 +1,113 @@
+# PERSONALIZE: "*.k8s-homelab.jacobbanghart.com" below (line ~36) is this
+# deployment's own domain -- replace with your own before applying to your
+# fork.
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: traefik
+  namespace: traefik
+spec:
+  interval: 10m
+  chart:
+    spec:
+      chart: traefik
+      version: "39.0.7"
+      sourceRef:
+        kind: HelmRepository
+        name: traefik
+        namespace: traefik
+  install:
+    crds: CreateReplace
+    remediation:
+      retries: 3
+  upgrade:
+    crds: CreateReplace
+    remediation:
+      retries: 3
+  values:
+    # Real certs via cert-manager's ACME/Cloudflare DNS-01 ClusterIssuer
+    # (clusters/k8s-homelab-config/cert-manager/letsencrypt-cloudflare-issuer.yaml),
+    # not Traefik's own built-in ACME -- the traefik chart hard-rejects
+    # enabling its built-in ACME with more than 1 replica
+    # ("You can not enable acme if you set more than one traefik replica"),
+    # which conflicts with the 3-replica zero-downtime-drain setup below.
+    # cert-manager sidesteps this entirely: issued certs are stored as
+    # regular Kubernetes Secrets, naturally available to all 3 replicas via
+    # etcd, no shared file/storage needed. Each app gets its own explicit
+    # Certificate resource + secretName (same explicit pattern the old
+    # self-signed setup used), not a static default -- apps get a
+    # temporary *.k8s-homelab.jacobbanghart.com namespace until they're
+    # migrated to their real final hostnames.
+    ingressClass:
+      enabled: true
+      isDefaultClass: true
+
+    # Needed so IngressRoutes outside the traefik namespace (e.g.
+    # headlamp/) can reference the shared basic-auth Middleware defined
+    # here instead of every app duplicating its own copy.
+    providers:
+      kubernetesCRD:
+        allowCrossNamespace: true
+
+    ingressRoute:
+      dashboard:
+        enabled: true
+        middlewares:
+          - name: basic-auth
+
+    ports:
+      web:
+        http:
+          redirections:
+            entryPoint:
+              to: websecure
+              scheme: https
+      websecure:
+        http:
+          tls:
+            enabled: true
+
+    # 3 replicas, one per worker, so draining any single node still leaves
+    # 2 ready endpoints -- zero-downtime drains instead of a gap while a
+    # single replacement pod reschedules and passes its readiness probe.
+    # Pinned rather than first-free: the old cluster's Traefik only held .200
+    # because it was first to ask. STAGING .230 while both clusters share the
+    # L2 segment; becomes 10.4.0.200 at cutover (Phase 4).
+    service:
+      annotations:
+        metallb.io/loadBalancerIPs: "10.4.0.230"
+
+    deployment:
+      # Single node: the 3-replica/drain rationale above no longer applies.
+      replicas: 1
+
+    # Default surge-first rollout (maxSurge:1, maxUnavailable:0) deadlocks
+    # here: a 4th pod can't schedule under the 1-per-node topology spread
+    # constraint below (all 3 workers already have a pod), so it sits
+    # Pending until manually intervened. Terminate-first instead: free a
+    # node slot before scheduling the replacement.
+    updateStrategy:
+      type: RollingUpdate
+      rollingUpdate:
+        maxUnavailable: 1
+        maxSurge: 0
+
+    podDisruptionBudget:
+      enabled: true
+      maxUnavailable: 1
+
+    # Bumped from 128Mi/256Mi (2026-07-19) -- all 3 replicas were
+    # OOMKilling repeatedly under real traffic. 256Mi is too tight once
+    # Traefik is terminating TLS for a dozen+ hostnames plus running
+    # speedtest's buffering Middleware, which holds each response fully
+    # in memory up to its 35MB cap -- a large streamed download (e.g. an
+    # OpenSpeedTest transfer) tips a replica over the limit, gets killed
+    # mid-stream, and looks like a dead connection/bad speed client-side
+    # even though the pod comes back up within seconds.
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "256Mi"
+      limits:
+        cpu: "1000m"
+        memory: "1Gi"

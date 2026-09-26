@@ -1,0 +1,95 @@
+---
+# CloudNativePG scraping + replication alerting (authentik-postgres,
+# grafana-postgres).
+#
+# Added 2026-09-25 after authentik-postgres-3 fell onto a diverged timeline
+# twice (2026-09-20 outage, 2026-09-25 near-miss). Both times CNPG kept
+# reporting the cluster "3/3 ready" while the replica replayed nothing, and
+# the primary's HA replication slot for it pinned WAL until the PVCs filled.
+# The only alert that fired was the generic KubePersistentVolumeFillingUp --
+# a symptom days downstream of the real failure. Before this file no CNPG
+# pod was scraped at all (enablePodMonitor is false on both Clusters).
+#
+# One PodMonitor here covers every CNPG instance cluster-wide, rather than
+# enablePodMonitor per Cluster (deprecated in CNPG 1.26+, and it would split
+# this across the flux and k8s-homelab repos). Each app namespace's
+# NetworkPolicy already admits ingress from `monitoring`.
+#
+# Every metric name was verified present in Prometheus on 2026-09-25.
+#
+# Gotcha: with replicationSlots.synchronizeReplicas, CNPG mirrors the HA
+# slots onto every standby, and those copies are always active=0. Slot rules
+# must be joined to the primary (cnpg_pg_replication_in_recovery == 0) or
+# they fire permanently.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: cnpg-instances
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  namespaceSelector:
+    any: true
+  selector:
+    matchLabels:
+      cnpg.io/podRole: instance
+  podMetricsEndpoints:
+    - port: metrics
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: cnpg-rules
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: cnpg.replication
+      rules:
+        # The actual failure mode. A standby whose WAL receiver is down is
+        # not replicating, whatever the Cluster status says. 15m rides out
+        # a pod restart or a fresh `kubectl cnpg destroy` re-clone.
+        - alert: CNPGReplicaNotStreaming
+          expr: |
+            cnpg_pg_replication_in_recovery == 1
+            and on (namespace, pod) cnpg_pg_replication_is_wal_receiver_up == 0
+          for: 15m
+          labels:
+            severity: critical
+          annotations:
+            summary: "CNPG standby {{ $labels.pod }} is not streaming"
+            description: >-
+              {{ $labels.namespace }}/{{ $labels.pod }} is in recovery but its
+              WAL receiver has been down for 15m. Its slot on the primary is
+              pinning WAL. Check its log for "not in this server's history"
+              (diverged timeline); if so rebuild it with
+              `kubectl cnpg destroy <cluster> <n> -n {{ $labels.namespace }}`.
+        # Same failure seen from the primary side, in case the standby pod
+        # is gone entirely and exports nothing.
+        - alert: CNPGPrimarySlotInactive
+          expr: |
+            cnpg_pg_replication_slots_active == 0
+            and on (namespace, pod) cnpg_pg_replication_in_recovery == 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Inactive replication slot {{ $labels.slot_name }} on primary {{ $labels.pod }}"
+            description: >-
+              No standby has consumed slot {{ $labels.slot_name }} on
+              {{ $labels.namespace }}/{{ $labels.pod }} for 15m; it retains WAL
+              until max_slot_wal_keep_size invalidates it.
+        # Early warning well below authentik's 6GB max_slot_wal_keep_size
+        # (flux: authentik/postgres-cluster.yaml). archive_timeout=5min makes
+        # an idle DB still produce ~4.6GB/day, so 2GiB ~ 10h of a stalled slot.
+        - alert: CNPGSlotRetainingWAL
+          expr: |
+            cnpg_pg_replication_slots_pg_wal_lsn_diff > 2 * 1024 * 1024 * 1024
+            and on (namespace, pod) cnpg_pg_replication_in_recovery == 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Slot {{ $labels.slot_name }} on {{ $labels.pod }} is holding {{ $value | humanize1024 }}B of WAL"

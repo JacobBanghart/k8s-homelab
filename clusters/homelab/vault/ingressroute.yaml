@@ -1,0 +1,39 @@
+# PERSONALIZE: the hostname below (vault.k8s-homelab.jacobbanghart.com) is
+# this deployment's own domain -- replace with your own before applying to
+# your fork.
+#
+# TLS bridging, not passthrough: Traefik terminates a real Cloudflare-
+# issued cert for external clients, then re-encrypts to Vault's backend
+# using serverstransport.yaml (which trusts Vault's own internal CA).
+# Needed because Vault's Raft retry_join dials vault-N.vault-internal
+# hostnames on the same listener/port/cert externally exposed here, and a
+# publicly-issued cert can never include those (not a valid public
+# domain) -- so a single passthrough cert can't satisfy both. Vault's own
+# listener/cert/Raft config (release.yaml, certificate.yaml) is completely
+# unaffected by this -- only how Traefik routes to it changed.
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: vault
+  namespace: vault
+  annotations:
+    # Internal admin tool, resolved via Pi-hole only -- keep it off
+    # external-dns's public Cloudflare records.
+    # external-dns has no "exclude" annotation -- that key is silently
+    # ignored, which is why it never kept anything unpublished. The real
+    # opt-out is the controller key: any value other than "dns-controller"
+    # makes every source skip the object.
+    external-dns.alpha.kubernetes.io/controller: "none"
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`vault.k8s-homelab.jacobbanghart.com`)
+      kind: Rule
+      services:
+        - name: vault
+          port: 8200
+          scheme: https
+          serversTransport: vault-backend
+  tls:
+    secretName: vault-external-tls
