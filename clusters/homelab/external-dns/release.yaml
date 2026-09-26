@@ -1,0 +1,93 @@
+# PERSONALIZE: "jacobbanghart.com" below (line 36) is this deployment's own
+# domain -- replace with your own zone before applying to your fork.
+#
+# txtOwnerId is distinct from dev's own external-dns ("external-dns") so
+# the two clusters' instances never fight over the same Cloudflare
+# records during the migration -- policy: sync only ever touches records
+# this instance's own TXT ownership records claim.
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: external-dns
+  namespace: external-dns
+spec:
+  interval: 10m
+  chart:
+    spec:
+      chart: external-dns
+      version: "1.21.1"
+      sourceRef:
+        kind: HelmRepository
+        name: external-dns
+        namespace: external-dns
+  install:
+    remediation:
+      retries: 3
+  upgrade:
+    remediation:
+      retries: 3
+  values:
+    provider:
+      name: cloudflare
+    # k8s-homelab apps all expose via Traefik IngressRoute, not plain
+    # Ingress -- traefik-proxy is the source that watches those.
+    sources:
+      - ingress
+      - service
+      - traefik-proxy
+    domainFilters:
+      - jacobbanghart.com
+    policy: sync
+    txtOwnerId: k8s-homelab
+    extraArgs:
+      - --cloudflare-dns-records-per-page=5000
+      # Publish the WAN address rather than whatever IP the source reports.
+      #
+      # Every app here fronts on Traefik, whose Service is a MetalLB
+      # LoadBalancer on VLAN 30, so the source address is always 10.4.0.200 --
+      # an RFC1918 address. Published to public DNS that resolves on the LAN
+      # and is unreachable from anywhere else, which is how
+      # labels.jacobbanghart.com came to be live and simultaneously dead to
+      # the internet. The k3s cluster never hit this: Traefik was reached
+      # through the node, and the node's declared ExternalIP was the WAN
+      # address, so that is what external-dns published.
+      #
+      # WAN:443 is forwarded to 10.4.0.200 by unifi_port_forward.dev_https in
+      # UnifiTerraform/port_forwards.tf. Residential IP: if the ISP changes
+      # it, this line changes with it.
+      - --default-targets=68.170.78.3
+      # Required. On its own --default-targets is only a fallback for sources
+      # that report NO target; the ingress and traefik-proxy sources always
+      # report one, so it would log "ignoring default targets" and keep the
+      # MetalLB VIP. Only --force-default-targets actually overrides them.
+      #
+      # Upstream marks this flag deprecated. If a chart bump drops it, the
+      # replacement is a per-resource
+      # external-dns.alpha.kubernetes.io/target annotation on every app.
+      #
+      # No "=true": this is a kingpin bool flag, which takes the bare form or
+      # --no-force-default-targets. Passing a value crashes the process at
+      # startup with "flag parsing error: unexpected true".
+      - --force-default-targets
+    podAnnotations:
+      prometheus.io/scrape: "true"
+      prometheus.io/port: "7979"
+      prometheus.io/path: "/metrics"
+    env:
+      - name: CF_API_KEY
+        valueFrom:
+          secretKeyRef:
+            name: cloudflare-credentials
+            key: apiKey
+      - name: CF_API_EMAIL
+        valueFrom:
+          secretKeyRef:
+            name: cloudflare-credentials
+            key: email
+    resources:
+      requests:
+        cpu: "10m"
+        memory: "32Mi"
+      limits:
+        cpu: "100m"
+        memory: "128Mi"

@@ -71,11 +71,10 @@ spec:
     # 2 ready endpoints -- zero-downtime drains instead of a gap while a
     # single replacement pod reschedules and passes its readiness probe.
     # Pinned rather than first-free: the old cluster's Traefik only held .200
-    # because it was first to ask. STAGING .230 while both clusters share the
-    # L2 segment; becomes 10.4.0.200 at cutover (Phase 4).
+    # because it was first to ask. Every public hostname NATs to this IP.
     service:
       annotations:
-        metallb.io/loadBalancerIPs: "10.4.0.230"
+        metallb.io/loadBalancerIPs: "10.4.0.200"
 
     deployment:
       # Single node: the 3-replica/drain rationale above no longer applies.

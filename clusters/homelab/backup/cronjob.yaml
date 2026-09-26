@@ -4,9 +4,6 @@ metadata:
   name: offsite-backup
   namespace: backup
 spec:
-  # Suspended until cutover (docs/single-node-migration.md Phase 4): before
-  # then the apps and their data are not live on this cluster yet.
-  suspend: true
   # Same slot the Ceph job used; the TrueNAS job runs at 02:00.
   schedule: "0 3 * * *"
   timeZone: America/Los_Angeles
