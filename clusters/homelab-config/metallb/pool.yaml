@@ -7,9 +7,7 @@ spec:
   # Reserved outside VLAN 30's DHCP range (dhcp_stop set to 10.4.0.199 in
   # UnifiTerraform) so these addresses are never handed out by DHCP.
   addresses:
-    # STAGING range while the old cluster still owns .200-.220 on the same
-    # L2 segment. Switched to 10.4.0.200-10.4.0.220 at cutover (Phase 4).
-    - 10.4.0.230-10.4.0.239
+    - 10.4.0.200-10.4.0.220
 ---
 apiVersion: metallb.io/v1beta1
 kind: L2Advertisement
