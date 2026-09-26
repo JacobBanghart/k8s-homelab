@@ -1,0 +1,70 @@
+# Replaces clusters/k8s-homelab/ceph-backup (Ceph RBD export-diff), which
+# cannot exist without Ceph. Same restic repo, same credentials, host
+# `homelab`, tag `local-path`.
+#
+# Order: consistent logical dumps first (Postgres, MariaDB, Vault raft
+# snapshot), then a file-level pass over every local-path PV. The file pass
+# is NOT crash-consistent for live databases -- that is what the dumps are
+# for; restore DBs from the dumps, everything else from the files.
+#
+# No `restic forget/prune` here on purpose: the TrueNAS job
+# (/root/restic-daily.sh) prunes repository-wide with --group-by host,tags,
+# so this host/tag pair inherits the 7d/5w/6m retention. Two jobs pruning
+# the same repo would fight over the exclusive lock.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: offsite-backup-script
+  namespace: backup
+data:
+  backup.sh: |
+    #!/bin/sh
+    set -eu
+    R=/shared/restic; K=/shared/kubectl
+    TAGS="--host homelab --tag local-path"
+    fail=0
+
+    "$R" snapshots --latest 1 >/dev/null || { echo "restic repo unreachable"; exit 1; }
+
+    # dump <label> <namespace> <label-selector> <container|-> <shell command>
+    dump() {
+      pod=$("$K" -n "$2" get pods -l "$3" --field-selector=status.phase=Running \
+              -o jsonpath='{.items[0].metadata.name}')
+      if [ -z "$pod" ]; then echo "SKIP $1: no running pod for $3"; fail=1; return; fi
+      c=""; [ "$4" != "-" ] && c="-c $4"
+      echo "dump $1 from $2/$pod"
+      if ! "$K" -n "$2" exec "$pod" $c -- sh -c "$5" \
+           | "$R" backup --stdin --stdin-filename "$1.sql" $TAGS --tag db --tag "$1"; then
+        echo "FAIL dump $1"; fail=1
+      fi
+    }
+    dump authentik-postgres authentik "cnpg.io/cluster=authentik-postgres,cnpg.io/instanceRole=primary" postgres 'pg_dumpall'
+    dump grafana-postgres monitoring "cnpg.io/cluster=grafana-postgres,cnpg.io/instanceRole=primary" postgres 'pg_dumpall'
+    dump immich-postgres immich "app=postgresql" - 'pg_dumpall -U "$POSTGRES_USER"'
+    dump nextcloud-postgres nextcloud "app=postgresql" - 'pg_dumpall -U "$POSTGRES_USER"'
+    dump invoice-ninja-mariadb invoice-ninja "app.kubernetes.io/name=mariadb" - \
+      '/opt/bitnami/mariadb/bin/mariadb-dump --all-databases --single-transaction -uroot -p"$MARIADB_ROOT_PASSWORD"'
+
+    # Vault: raft snapshot via Kubernetes auth (role `offsite-backup`, policy
+    # allowing read on sys/storage/raft/snapshot -- see docs/runbook.md).
+    if [ -f /shared/vault ]; then
+      export VAULT_ADDR=https://vault.vault.svc.cluster.local:8200 VAULT_CACERT=/vault-ca/ca.crt
+      jwt=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+      if VAULT_TOKEN=$(/shared/vault write -field=token auth/kubernetes/login role=offsite-backup jwt="$jwt") \
+         && export VAULT_TOKEN && /shared/vault operator raft snapshot save /tmp/vault.snap; then
+        "$R" backup /tmp/vault.snap $TAGS --tag vault || fail=1
+      else
+        echo "FAIL vault snapshot"; fail=1
+      fi
+    fi
+
+    # Files: every PV except disposable ones (metrics/logs, CI caches).
+    # local-path dirs are named pvc-<uid>_<namespace>_<pvc>.
+    "$R" backup /data $TAGS --tag files \
+      --exclude '/data/*_monitoring_prometheus-*' \
+      --exclude '/data/*_monitoring_storage-loki-*' \
+      --exclude '/data/*_monitoring_alertmanager-*' \
+      --exclude '/data/*_actions-runner-system_*' \
+      || fail=1
+
+    exit $fail

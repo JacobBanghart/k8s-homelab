@@ -1,0 +1,91 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: offsite-backup
+  namespace: backup
+spec:
+  # Suspended until cutover (docs/single-node-migration.md Phase 4): before
+  # then the apps and their data are not live on this cluster yet.
+  suspend: true
+  # Same slot the Ceph job used; the TrueNAS job runs at 02:00.
+  schedule: "0 3 * * *"
+  timeZone: America/Los_Angeles
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  startingDeadlineSeconds: 3600
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        metadata:
+          labels:
+            app: offsite-backup
+        spec:
+          serviceAccountName: offsite-backup
+          restartPolicy: Never
+          initContainers:
+            - name: fetch-tools
+              image: alpine:3.20
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  RV=0.17.3; KV=v1.34.10; VV=2.0.3
+                  wget -q -O- "https://github.com/restic/restic/releases/download/v${RV}/restic_${RV}_linux_amd64.bz2" | bunzip2 > /shared/restic
+                  wget -q -O /shared/kubectl "https://dl.k8s.io/release/${KV}/bin/linux/amd64/kubectl"
+                  wget -q -O- "https://releases.hashicorp.com/vault/${VV}/vault_${VV}_linux_amd64.zip" | unzip -p - vault > /shared/vault
+                  chmod +x /shared/restic /shared/kubectl /shared/vault
+              volumeMounts:
+                - name: shared
+                  mountPath: /shared
+          containers:
+            - name: backup
+              image: alpine:3.20
+              command: ["/bin/sh", "/scripts/backup.sh"]
+              envFrom:
+                - secretRef:
+                    name: restic-credentials
+              env:
+                - name: RESTIC_CACHE_DIR
+                  value: /cache
+              resources:
+                requests:
+                  cpu: 200m
+                  memory: 512Mi
+                limits:
+                  memory: 4Gi
+              volumeMounts:
+                - name: shared
+                  mountPath: /shared
+                - name: scripts
+                  mountPath: /scripts
+                - name: data
+                  mountPath: /data
+                  readOnly: true
+                - name: cache
+                  mountPath: /cache
+                - name: vault-ca
+                  mountPath: /vault-ca
+                  readOnly: true
+          volumes:
+            - name: shared
+              emptyDir: {}
+            - name: scripts
+              configMap:
+                name: offsite-backup-script
+            # Every PersistentVolume on this node (roles/single_node data disk).
+            - name: data
+              hostPath:
+                path: /var/lib/local-path
+                type: Directory
+            # Persisting restic's cache avoids re-downloading index/metadata
+            # from S3 every night.
+            - name: cache
+              hostPath:
+                path: /var/cache/restic-offsite-backup
+                type: DirectoryOrCreate
+            - name: vault-ca
+              secret:
+                secretName: k8s-homelab-ca-cert
+                optional: true

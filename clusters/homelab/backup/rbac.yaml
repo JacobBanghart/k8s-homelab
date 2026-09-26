@@ -1,0 +1,90 @@
+# The nightly job dumps each database by exec'ing its own client inside the
+# DB pod (no DB credentials leave those pods), so it needs get/list pods and
+# pods/exec -- in the DB namespaces only.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: offsite-backup
+  namespace: backup
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: offsite-backup-db-dump
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: offsite-backup-db-dump
+  namespace: authentik
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: offsite-backup-db-dump
+subjects:
+  - kind: ServiceAccount
+    name: offsite-backup
+    namespace: backup
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: offsite-backup-db-dump
+  namespace: monitoring
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: offsite-backup-db-dump
+subjects:
+  - kind: ServiceAccount
+    name: offsite-backup
+    namespace: backup
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: offsite-backup-db-dump
+  namespace: immich
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: offsite-backup-db-dump
+subjects:
+  - kind: ServiceAccount
+    name: offsite-backup
+    namespace: backup
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: offsite-backup-db-dump
+  namespace: nextcloud
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: offsite-backup-db-dump
+subjects:
+  - kind: ServiceAccount
+    name: offsite-backup
+    namespace: backup
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: offsite-backup-db-dump
+  namespace: invoice-ninja
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: offsite-backup-db-dump
+subjects:
+  - kind: ServiceAccount
+    name: offsite-backup
+    namespace: backup
