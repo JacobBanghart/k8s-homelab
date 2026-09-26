@@ -213,9 +213,10 @@ variable "single_node" {
     vm_id          = 9121
     template_vm_id = 9001
     cores          = 32
-    # 32 GiB during migration (host headroom), 40 GiB after Phase 6.
-    memory         = 32768
-    memory_min     = 32768
+    # 32 GiB during migration (host headroom); raised to 40 GiB at cutover
+    # once the old VMs were shut down -- 32 left pod requests at 99%.
+    memory         = 40960
+    memory_min     = 40960
     root_disk_size = 100
     # local-path PV root. Staged on etcd-fast (spare 990 Pro); moves to the
     # host ZFS pool in Phase 6 via `qm disk move`.

@@ -6,11 +6,31 @@
 # Resolves the endpoint for the node itself and for hostNetwork pods (kubelet
 # mounts the node's /etc/hosts into them), which is everything that talks to
 # the apiserver by name: kubelet, controller-manager, scheduler, Cilium.
-- name: Resolve the control-plane endpoint name locally
+#
+# Written to BOTH /etc/hosts and cloud-init's hosts template: the Proxmox
+# cloud-init user-data sets manage_etc_hosts: true, which regenerates
+# /etc/hosts from the template on every boot. /etc/hosts alone was wiped by
+# the first reboot (2026-09-26), leaving Cilium unable to resolve the
+# endpoint and the whole node without pod networking.
+- name: Resolve the control-plane endpoint name locally (survives reboot)
   ansible.builtin.lineinfile:
-    path: /etc/hosts
+    path: "{{ item }}"
     regexp: '\s{{ control_plane_endpoint.split(":")[0] | regex_escape }}$'
     line: "{{ control_plane_endpoint_ip }} {{ control_plane_endpoint.split(':')[0] }}"
+  loop:
+    - /etc/hosts
+    - /etc/cloud/templates/hosts.debian.tmpl
+
+# kubeadm labels control-plane nodes exclude-from-external-load-balancers,
+# and MetalLB will not announce from such a node -- on a single node that
+# silently blacks out every LoadBalancer IP.
+- name: Let MetalLB announce from this (control-plane) node
+  ansible.builtin.command: >
+    kubectl --kubeconfig /etc/kubernetes/admin.conf label node {{ inventory_hostname }}
+    node.kubernetes.io/exclude-from-external-load-balancers-
+  register: lb_label
+  changed_when: "'unlabeled' in lb_label.stdout"
+  failed_when: false
 
 # --- Kubernetes packages ----------------------------------------------------
 # The golden image pins an older minor. pkgs.k8s.io has one repo per minor, so

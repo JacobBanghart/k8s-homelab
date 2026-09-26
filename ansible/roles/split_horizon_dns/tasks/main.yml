@@ -59,14 +59,17 @@
 
 # --- Path 2: the masters' own resolver, for kube-apiserver ---
 
+# Also into cloud-init's hosts template: manage_etc_hosts: true (Proxmox
+# cloud-init user-data) rebuilds /etc/hosts from it on every boot, so a
+# /etc/hosts-only entry silently disappears at the next reboot.
 - name: Pin the OIDC issuer to the Traefik VIP in the masters' /etc/hosts
   ansible.builtin.lineinfile:
-    path: /etc/hosts
-    regexp: '\s{{ item | regex_escape }}\s*$'
-    line: "{{ split_horizon_dns_target }} {{ item }}"
+    path: "{{ item.0 }}"
+    regexp: '\s{{ item.1 | regex_escape }}\s*$'
+    line: "{{ split_horizon_dns_target }} {{ item.1 }}"
     state: present
   become: true
-  loop: "{{ split_horizon_dns_node_hostnames }}"
+  loop: "{{ ['/etc/hosts', '/etc/cloud/templates/hosts.debian.tmpl'] | product(split_horizon_dns_node_hostnames) | list }}"
   when: inventory_hostname in groups['masters']
   register: node_hosts_patched
 
