@@ -5,6 +5,12 @@ resource "proxmox_virtual_environment_vm" "worker" {
   node_name = var.proxmox_node
   vm_id     = each.value.vm_id
 
+  # Parked: the cluster moved to the single node (vms-single.tf) on
+  # 2026-09-26. These stay defined but shut down as the rollback path until
+  # Phase 6 of docs/single-node-migration.md deletes them.
+  started = false
+  on_boot = false
+
   clone {
     # See the note in vms-masters.tf: per-node override, because bumping
     # var.template_vm_id replaces every node at once. A worker rebuild also

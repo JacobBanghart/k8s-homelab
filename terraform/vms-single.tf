@@ -74,4 +74,12 @@ resource "proxmox_virtual_environment_vm" "single" {
   operating_system {
     type = "l26"
   }
+
+  # 9121 was re-imported (2026-09-26) after its original state was lost with
+  # the pre-Omarchy desktop. An imported VM has no record of how it was cloned,
+  # and clone is ForceNew, so without this every plan would replace the live
+  # node. Clone settings only matter at create time anyway.
+  lifecycle {
+    ignore_changes = [clone]
+  }
 }
