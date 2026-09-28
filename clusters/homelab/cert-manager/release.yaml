@@ -26,6 +26,17 @@ spec:
     # actually installs them.
     crds:
       enabled: true
+    # Check DNS-01 propagation against public resolvers, not cluster DNS.
+    #
+    # From the k8s-lab VLAN, an NS lookup for jacobbanghart.com through
+    # CoreDNS comes back empty (the same query from the primary LAN via
+    # Pi-hole answers fine), so cert-manager could never find Cloudflare's
+    # authoritative servers and every challenge sat at "DNS record not yet
+    # propagated" indefinitely -- the TXT records themselves were live.
+    # Found 2026-09-27 with 9 challenges stuck for ~29h since the cutover.
+    extraArgs:
+      - --dns01-recursive-nameservers-only
+      - --dns01-recursive-nameservers=1.1.1.1:53,8.8.8.8:53
     resources:
       requests:
         cpu: "10m"
