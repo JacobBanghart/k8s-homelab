@@ -19,7 +19,11 @@ metadata:
 data:
   backup.sh: |
     #!/bin/sh
-    set -eu
+    # pipefail: dump() pipes `kubectl exec ... | restic backup --stdin`.
+    # Without it the pipeline's status is restic's alone, so a dump that
+    # errored mid-stream still "succeeded" and restic saved a truncated
+    # file -- which is how the nextcloud dump failed silently every night.
+    set -euo pipefail
     R=/shared/restic; K=/shared/kubectl
     TAGS="--host homelab --tag local-path"
     fail=0
@@ -41,7 +45,10 @@ data:
     dump authentik-postgres authentik "cnpg.io/cluster=authentik-postgres,cnpg.io/instanceRole=primary" postgres 'pg_dumpall'
     dump grafana-postgres monitoring "cnpg.io/cluster=grafana-postgres,cnpg.io/instanceRole=primary" postgres 'pg_dumpall'
     dump immich-postgres immich "app=postgresql" - 'pg_dumpall -U "$POSTGRES_USER"'
-    dump nextcloud-postgres nextcloud "app=postgresql" - 'pg_dumpall -U "$POSTGRES_USER"'
+    # pg_dump, not pg_dumpall: nextcloud's POSTGRES_USER (oc_*) is not a
+    # superuser, so pg_dumpall dies reading pg_authid. The nextcloud database
+    # is the only non-template one in this instance, so nothing is lost.
+    dump nextcloud-postgres nextcloud "app=postgresql" - 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
     dump invoice-ninja-mariadb invoice-ninja "app.kubernetes.io/name=mariadb" - \
       '/opt/bitnami/mariadb/bin/mariadb-dump --all-databases --single-transaction -uroot -p"$MARIADB_ROOT_PASSWORD"'
 
