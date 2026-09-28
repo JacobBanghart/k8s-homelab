@@ -1,0 +1,8 @@
+[Unit]
+Description=Back up Proxmox host config to TrueNAS
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/prox-config-backup.sh
