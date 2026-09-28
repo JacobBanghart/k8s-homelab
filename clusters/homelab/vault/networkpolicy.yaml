@@ -18,6 +18,12 @@
 #                     is not strictly required -- included to match the house
 #                     pattern used by every app namespace and so that adding
 #                     one later does not silently fail to scrape.
+#   backup            The nightly offsite-backup CronJob logs in via Kubernetes
+#                     auth and takes `vault operator raft snapshot save`.
+#                     Missing from the original list, so every run from
+#                     2026-09-26 timed out on auth/kubernetes/login and the
+#                     job failed with no Vault snapshot (the rest of the run
+#                     -- DB dumps, local-path files -- still reached S3).
 #
 # Ingress-only on purpose, consistent with the rest of the cluster. Egress
 # restrictions are a separate piece of work; see the Cilium note in the vault.
@@ -42,3 +48,6 @@ spec:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: monitoring
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: backup
