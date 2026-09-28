@@ -29,6 +29,11 @@ locals {
     # the dev-cluster migration) -- real hostname from the start, no
     # .local placeholder needed since this app never had one on dev.
     k8s_homelab_headlamp = { domain = "headlamp.k8s-homelab.jacobbanghart.com", ip = "10.4.0.200" }
+
+    # LSAT gradebook (flux repo, clusters/homelab-apps/lsat-gradebook). LAN-only
+    # on purpose: no public Cloudflare record, and the IngressRoute carries an
+    # IPAllowList middleware, since the app has no login.
+    k8s_homelab_lsat = { domain = "lsat.jacobbanghart.com", ip = "10.4.0.200" }
   }
 }
 
