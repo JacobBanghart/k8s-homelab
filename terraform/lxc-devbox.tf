@@ -48,6 +48,7 @@ resource "proxmox_virtual_environment_container" "devbox" {
   unprivileged  = true
   started       = true
   start_on_boot = true
+  protection    = true
 
   cpu {
     cores = var.devbox.cores

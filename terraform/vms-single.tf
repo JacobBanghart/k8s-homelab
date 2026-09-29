@@ -5,6 +5,13 @@ resource "proxmox_virtual_environment_vm" "single" {
   node_name = var.proxmox_node
   vm_id     = var.single_node.vm_id
 
+  # This VM is the whole cluster; block accidental deletion (UI or destroy).
+  protection = true
+
+  # Hardware changes (e.g. cpu.numa) wait for the next planned restart
+  # instead of rebooting the only k8s node mid-apply.
+  reboot_after_update = false
+
   # One controller per disk so iothread actually applies.
   scsi_hardware = "virtio-scsi-single"
 
@@ -16,6 +23,9 @@ resource "proxmox_virtual_environment_vm" "single" {
   cpu {
     cores = var.single_node.cores
     type  = "host"
+    # prox is 2 sockets / 2 NUMA nodes; 32 vCPU + 40G fits in one, so let the
+    # guest and host schedulers keep memory local instead of a flat topology.
+    numa = true
   }
 
   memory {
