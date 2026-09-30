@@ -3,3 +3,15 @@ kind: Kustomization
 resources:
 - gotk-components.yaml
 - gotk-sync.yaml
+# Fetch over SSH on port 443 (ssh.github.com): port 22 to some github.com
+# addresses times out from the cluster network. Patched here, not in the
+# generated gotk-sync.yaml, so a re-bootstrap doesn't lose it. The
+# flux-system secret's known_hosts must carry [ssh.github.com]:443 entries.
+patches:
+- target:
+    kind: GitRepository
+    name: flux-system
+  patch: |
+    - op: replace
+      path: /spec/url
+      value: ssh://git@ssh.github.com:443/JacobBanghart/k8s-homelab

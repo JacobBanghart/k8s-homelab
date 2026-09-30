@@ -16,4 +16,6 @@ spec:
     branch: main
   secretRef:
     name: flux-apps-repo-key
-  url: ssh://git@github.com/JacobBanghart/flux
+  # Port 443 (ssh.github.com): port 22 to some github.com addresses times out
+  # from the cluster network. known_hosts needs [ssh.github.com]:443 entries.
+  url: ssh://git@ssh.github.com:443/JacobBanghart/flux
