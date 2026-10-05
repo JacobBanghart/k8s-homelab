@@ -8,7 +8,7 @@ spec:
   chart:
     spec:
       chart: metallb
-      version: "0.14.9"
+      version: "0.16.1"
       sourceRef:
         kind: HelmRepository
         name: metallb
@@ -53,24 +53,7 @@ spec:
           memory: "96Mi"
         limits:
           memory: "256Mi"
-      frr:
-        resources:
-          requests:
-            cpu: "10m"
-            memory: "48Mi"
-          limits:
-            memory: "128Mi"
-      frrMetrics:
-        resources:
-          requests:
-            cpu: "10m"
-            memory: "32Mi"
-          limits:
-            memory: "96Mi"
-      reloader:
-        resources:
-          requests:
-            cpu: "10m"
-            memory: "16Mi"
-          limits:
-            memory: "64Mi"
+    # L2 only, no BGP peers: run the native BGP backend so neither FRR
+    # mode (deprecated in 0.16) nor the frr-k8s subchart gets deployed.
+    frrk8s:
+      enabled: false
