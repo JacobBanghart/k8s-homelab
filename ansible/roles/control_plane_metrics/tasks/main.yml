@@ -42,9 +42,17 @@
       python3 - <<'PYEOF' > /tmp/cc-metrics-desired.yaml
       import yaml
       cc = yaml.safe_load(open("/tmp/cc-metrics-current.yaml"))
-      cc.setdefault("controllerManager", {}).setdefault("extraArgs", {})["bind-address"] = "0.0.0.0"
-      cc.setdefault("scheduler", {}).setdefault("extraArgs", {})["bind-address"] = "0.0.0.0"
-      cc.setdefault("etcd", {}).setdefault("local", {}).setdefault("extraArgs", {})["listen-metrics-urls"] = "http://0.0.0.0:2381"
+      # v1beta4 extraArgs is a list of {name, value}; kubeadm 1.35 refuses a
+      # v1beta3-style map (see control_plane_oidc), so convert any map found.
+      def set_arg(comp, name, value):
+          args = comp.get("extraArgs") or []
+          if isinstance(args, dict):
+              args = [{"name": k, "value": str(v)} for k, v in args.items()]
+          args = [a for a in args if a["name"] != name] + [{"name": name, "value": value}]
+          comp["extraArgs"] = sorted(args, key=lambda a: a["name"])
+      set_arg(cc.setdefault("controllerManager", {}), "bind-address", "0.0.0.0")
+      set_arg(cc.setdefault("scheduler", {}), "bind-address", "0.0.0.0")
+      set_arg(cc.setdefault("etcd", {}).setdefault("local", {}), "listen-metrics-urls", "http://0.0.0.0:2381")
       print(yaml.safe_dump(cc, default_flow_style=False, sort_keys=True), end="")
       PYEOF
       if diff -q /tmp/cc-metrics-current.yaml /tmp/cc-metrics-desired.yaml >/dev/null 2>&1; then
