@@ -28,7 +28,7 @@ spec:
               args:
                 - |
                   set -eu
-                  RV=0.17.3; KV=v1.34.10; VV=2.0.3
+                  RV=0.17.3; KV=v1.34.10; VV=2.0.4
                   wget -q -O- "https://github.com/restic/restic/releases/download/v${RV}/restic_${RV}_linux_amd64.bz2" | bunzip2 > /shared/restic
                   wget -q -O /shared/kubectl "https://dl.k8s.io/release/${KV}/bin/linux/amd64/kubectl"
                   wget -q -O- "https://releases.hashicorp.com/vault/${VV}/vault_${VV}_linux_amd64.zip" | unzip -p - vault > /shared/vault
