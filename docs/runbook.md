@@ -3,22 +3,21 @@
 ## First-time setup
 
 ```bash
+# Credentials come from Vault (docs/secrets.md); the mise tasks fetch them.
+vault login -method=oidc role=admin
+
 # 1. Packer: build the golden template (VMID 9000)
-cd packer
-cp k8s-node.auto.pkrvars.hcl.example k8s-node.auto.pkrvars.hcl   # fill in real values
-packer init .
-packer validate .
-packer build .
+mise run packer -- init .
+mise run packer -- validate .
+mise run packer -- build .
 
 # 2. Terraform: clone masters + workers
-cd ../terraform
-cp terraform.tfvars.example terraform.tfvars   # fill in real values
-terraform init
-terraform plan
-terraform apply
+mise run tf -- init
+mise run tf -- plan
+mise run tf -- apply
 
 # 3. Ansible: bootstrap the cluster
-cd ../ansible
+cd ansible
 ansible-galaxy collection install -r requirements.yml
 ansible all -m ping                       # connectivity check
 ansible-playbook playbook.yml --check     # dry run

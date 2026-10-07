@@ -20,7 +20,6 @@ if you need to change something outside the `k8s-lab` VLAN, that's
 .
 ├── main.tf              # Provider and backend config
 ├── variables.tf         # Input variables
-├── terraform.tfvars     # Your credentials (gitignored)
 ├── vlans.tf             # k8s-lab VLAN/network definition
 ├── firewall.tf          # k8s-lab zone-based firewall policy
 ├── pihole_dns.tf        # Pi-hole DNS records for cluster apps (Grafana, demo-app)
@@ -41,43 +40,37 @@ for the full portability checklist (what to customize vs. what's generic).
 
 ## Setup
 
-### 1. Install Terraform
+### 1. Tools
 
-```bash
-# macOS
-brew install terraform
+`mise install` (from the repo root) installs the pinned Terraform, Vault CLI
+and jq.
 
-# Linux
-sudo apt install terraform
-# or download from https://terraform.io/downloads
-```
+### 2. Credentials
 
-### 2. Configure Credentials
-
-```bash
-cp terraform.tfvars.example terraform.tfvars
-# Edit terraform.tfvars with your UniFi + Pi-hole credentials
-```
-
-See `../docs/secrets.md` for where each value comes from.
+The UniFi and Pi-hole credentials live in Vault, shared with
+`UnifiTerraform`: `secret/unifi-terraform/controller` and
+`secret/unifi-terraform/pihole`. `mise run tf:unifi` (from the repo root)
+fetches them at run time. See `../docs/secrets.md` for where each value
+comes from.
 
 ### 3. Initialize and apply
 
 ```bash
-terraform init
-terraform plan
-terraform apply
+vault login -method=oidc role=admin
+mise run tf:unifi -- init
+mise run tf:unifi -- plan
+mise run tf:unifi -- apply
 ```
 
 If you already have a VLAN you want Terraform to adopt instead of create,
 import it first:
 
 ```bash
-terraform import unifi_network.k8s_lab <network-id>
+mise run tf:unifi -- import unifi_network.k8s_lab <network-id>
 ```
 
 ## Security Notes
 
-- `terraform.tfvars` is gitignored and contains credentials
+- Credentials are never written to disk: they come from Vault per run
 - `terraform.tfstate` is gitignored and contains sensitive data
 - Keep these files secure and backed up separately

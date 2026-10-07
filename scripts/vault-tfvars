@@ -1,0 +1,39 @@
+#!/bin/sh
+# Runs a command with Terraform/Packer variables loaded from Vault (see
+# mise.toml):
+#
+#   vault-tfvars <vault-path>... -- <command...>
+#
+# Every field of each KV secret is exported as TF_VAR_<field>, so the field
+# names are the Terraform variable names. Nothing is written to disk or
+# printed. If a secret can't be read (Vault login expired, offline) it fails
+# before running the command: run `vault login -method=oidc role=admin`.
+#
+# These are live infrastructure credentials, so they are never cached and
+# never loaded into mise's [env]; only the task that needs them gets them.
+set -eu
+
+paths=
+while [ $# -gt 0 ] && [ "$1" != -- ]; do
+  paths="$paths $1"
+  shift
+done
+if [ $# -lt 2 ]; then
+  echo "usage: vault-tfvars <vault-path>... -- <command...>" >&2
+  exit 2
+fi
+shift
+
+for path in $paths; do
+  if ! json=$(vault kv get -format=json "$path"); then
+    echo "vault-tfvars: can't read $path (vault login -method=oidc role=admin)" >&2
+    exit 1
+  fi
+  exports=$(printf '%s' "$json" | jq -r '
+    .data.data | to_entries[]
+    | select(.key | test("^[A-Za-z_][A-Za-z0-9_]*$"))
+    | "export TF_VAR_\(.key)=\(.value | tostring | @sh)"')
+  eval "$exports"
+done
+
+exec "$@"

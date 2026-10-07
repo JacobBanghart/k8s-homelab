@@ -1,20 +1,38 @@
 # Secrets checklist
 
-Nothing in this repo requires a committed secret — every credential-bearing
-file is gitignored, with a matching `.example` template to copy from. This
-doc is the single place listing what you need to gather, and in what order,
-to stand this cluster up from nothing. Work through it top to bottom; each
-phase's secrets are needed before that phase's tool runs.
+Nothing in this repo holds a secret, committed or not. Credentials live in
+Vault (`VAULT_ADDR` is set in `mise.toml`), and each `mise run` task fetches
+the ones it needs at run time, uncached — there are no `.tfvars` or
+`.pkrvars.hcl` files to fill in. Log in first:
+
+```
+vault login -method=oidc role=admin
+```
+
+This doc is the single place listing what you need to gather, and in what
+order, to stand this cluster up from nothing. Work through it top to bottom;
+each phase's secrets are needed before that phase's tool runs. Field names
+in Vault are the Terraform variable names (see `scripts/vault-tfvars`).
+
+| Vault path | Fields | Used by |
+|---|---|---|
+| `secret/k8s-homelab/proxmox` | `proxmox_api_token` | `mise run tf`, `mise run packer` |
+| `secret/unifi-terraform/controller` | `unifi_api_key`, `unifi_api_url`, `site` | `mise run tf:unifi` (shared with `UnifiTerraform`) |
+| `secret/unifi-terraform/pihole` | `pihole_password` | `mise run tf:unifi` (shared with `UnifiTerraform`) |
+
+The AWS stacks (`mise run tf:aws-backup`, `mise run tf:aws-kms`) and every
+S3 state backend use your `~/.aws` credentials.
 
 ## 1. Packer (golden image)
 
-File: `packer/k8s-node.auto.pkrvars.hcl` (copy from `.example` in the same
-directory).
+`mise run packer` takes the same Proxmox token as Terraform (step 3) and
+splits it into Packer's `proxmox_api_token_id` / `proxmox_api_token_secret`.
+To create the token: Proxmox web UI -> Datacenter -> Permissions -> API
+Tokens -> add a token for a user with VM/template management rights (e.g.
+`terraform@pve!k8s-homelab`).
 
-| Value | What it is | How to get it |
-|---|---|---|
-| `proxmox_api_token_secret` | Proxmox API token secret | Proxmox web UI -> Datacenter -> Permissions -> API Tokens -> add a token for a user with VM/template management rights (e.g. `terraform@pve!k8s-homelab`) |
-| `ssh_public_key` | Public half of an SSH keypair baked into the golden image | See "SSH keypair" below |
+`ssh_public_key` comes from `TF_VAR_ssh_public_key` in `mise.toml`'s
+`[env]` (it's public) — see "SSH keypair" below.
 
 ## 2. SSH keypair (used by Packer, Terraform, and Ansible)
 
@@ -26,17 +44,20 @@ Generate one if you don't already have it:
 ```
 ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519_k8s_homelab -C k8s-homelab-ansible
 ```
-The public key (`.pub`) is what goes into `ssh_public_key` in both the Packer
-and Terraform tfvars files below.
+The public key (`.pub`) is what goes into `TF_VAR_ssh_public_key` in
+`mise.toml`, which both Packer and Terraform read.
 
 ## 3. Terraform (VM provisioning)
 
-File: `terraform/terraform.tfvars` (copy from `.example`).
+Vault: `secret/k8s-homelab/proxmox`, read by `mise run tf`.
 
-| Value | What it is | How to get it |
+| Field | What it is | How to get it |
 |---|---|---|
-| `proxmox_api_token` | Full Proxmox API token, `user@realm!tokenid=secret` format | Same token created for Packer above — combine the token ID and secret into one string |
-| `ssh_public_key` | Same keypair as Packer | See above |
+| `proxmox_api_token` | Full Proxmox API token, `user@realm!tokenid=secret` format | The token from step 1 — combine the token ID and secret into one string |
+
+```
+vault kv put secret/k8s-homelab/proxmox proxmox_api_token=-   # paste, then Ctrl-D
+```
 
 ## 4. Ansible
 
@@ -49,15 +70,24 @@ time.
 
 ## 5. UniFi / Pi-hole (network config)
 
-File: `unifi/terraform.tfvars` (copy from `.example`).
+Vault: `secret/unifi-terraform/controller` and `secret/unifi-terraform/pihole`,
+read by `mise run tf:unifi`. They belong to the `UnifiTerraform` repo, which
+manages the rest of the same UniFi site with the same credentials.
 
-| Value | What it is | How to get it |
+| Field | What it is | How to get it |
 |---|---|---|
 | `unifi_api_key` | UniFi controller API key | UDM Pro UI -> Settings -> Admins & Users -> your user -> API Key |
 | `unifi_api_url` | UniFi controller URL | Usually `https://<gateway-ip>` |
 | `site` | UniFi site name | `default` unless you've renamed it |
-| `pihole_url` | Pi-hole admin URL | e.g. `https://<pihole-ip>` |
 | `pihole_password` | Pi-hole admin password | Whatever you set when Pi-hole was installed |
+
+`pihole_url` defaults to `https://pi.hole` (`unifi/variables.tf`); add a
+`pihole_url` field to the `pihole` secret to override it.
+
+```
+vault kv put secret/unifi-terraform/controller unifi_api_key=- unifi_api_url=https://<gateway-ip> site=default
+vault kv put secret/unifi-terraform/pihole pihole_password=-
+```
 
 This directory only manages the k8s-lab VLAN and its firewall isolation —
 it is not a copy of an entire home network's UniFi config. If you're

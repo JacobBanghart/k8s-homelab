@@ -74,10 +74,12 @@ the whole thing safe to resume after a partial failure.
 
 ## Quickstart
 
-Gather every credential you'll need up front — see `docs/secrets.md` for
-the full list and where each one comes from (Proxmox API token, SSH
-keypair, UniFi API key, Pi-hole password). Do that first; every step
-below assumes you already have them.
+Tools come from mise (`mise install`), and credentials from Vault: run
+`vault login -method=oidc role=admin`, and the `mise run` tasks below fetch
+what they need at run time. See `docs/secrets.md` for the full list, where
+each one comes from, and the Vault paths to store them under (Proxmox API
+token, SSH keypair, UniFi API key, Pi-hole password). Do that first; every
+step below assumes Vault already has them.
 
 ### 1. Adjust the config for your own environment
 
@@ -146,11 +148,9 @@ don't want a second Flux source, or point it at your own.
 ### 2. Build the golden image (Packer)
 
 ```bash
-cd packer
-cp k8s-node.auto.pkrvars.hcl.example k8s-node.auto.pkrvars.hcl
-# fill in proxmox_api_token_secret and ssh_public_key
-packer init k8s-node.pkr.hcl
-packer build k8s-node.pkr.hcl
+# Proxmox token from Vault, ssh_public_key from mise.toml [env]
+mise run packer -- init k8s-node.pkr.hcl
+mise run packer -- build k8s-node.pkr.hcl
 ```
 
 This boots an Ubuntu ISO against Proxmox, unattended-installs it,
@@ -163,12 +163,10 @@ just clones the template it leaves behind.
 ### 3. Provision the VMs (Terraform)
 
 ```bash
-cd terraform
-cp terraform.tfvars.example terraform.tfvars
-# fill in proxmox_api_token and ssh_public_key
-terraform init
-terraform plan
-terraform apply
+# runs in terraform/; Proxmox token from Vault
+mise run tf -- init
+mise run tf -- plan
+mise run tf -- apply
 ```
 
 This clones the template into however many master/worker VMs you defined

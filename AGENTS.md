@@ -8,8 +8,9 @@
   (`common`, `containerd`, `kubeadm-init`, `cni`, `join-masters`,
   `join-workers`) — that's the "build from partials" requirement this
   project is designed around, in place of image/snapshot layering.
-- terraform state and `*.tfvars` (except `*.tfvars.example`) are gitignored
-  — never commit real credentials or state.
+- Credentials live in Vault and are fetched by the `mise run` tasks
+  (`mise.toml`, `docs/secrets.md`); terraform state and any `*.tfvars` are
+  gitignored — never commit real credentials or state.
 - Once Flux is bootstrapped, ongoing addons (StorageClass/CSI, MetalLB,
   ingress, etc.) should go through Flux — new app directories under
   `clusters/<your-context-name>/`, one per app: Namespace ->

@@ -1,0 +1,58 @@
+[tools]
+terraform = "1.15.8"
+packer = "1.16.1"
+# uv lets mise install ansible-core (pypi).
+uv = "0.12.23"
+ansible-core = "2.21.5"
+kubectl = "1.34.12"
+flux2 = "2.9.6"
+helm = "3.19.0"
+aws-cli = "2.37.10"
+# Matches the homelab Vault server.
+vault = "2.0.4"
+jq = "1.8.2"
+
+# Credentials live in Vault, not in terraform.tfvars / *.auto.pkrvars.hcl.
+# Run `vault login -method=oidc role=admin` first. They are all live
+# infrastructure credentials, so nothing secret is loaded here: each task
+# below fetches what it needs at run time (scripts/vault-tfvars), uncached.
+# The AWS stacks and every S3 state backend use ~/.aws credentials.
+[env]
+VAULT_ADDR = "https://vault.k8s-homelab.jacobbanghart.com"
+# Public half of the cluster keypair (Packer, Terraform; see docs/secrets.md).
+TF_VAR_ssh_public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOGGU01EEJYtWCirSPyz0jnaMgfs8vzOaa3gy8If8rcf k8s-homelab-ansible"
+
+# Terraform stacks, e.g. `mise run tf -- plan`.
+[tasks.tf]
+description = "Terraform for terraform/ (Proxmox VMs; token from Vault secret/k8s-homelab/proxmox)"
+dir = "terraform"
+run = "{{config_root}}/scripts/vault-tfvars secret/k8s-homelab/proxmox -- terraform"
+
+[tasks."tf:unifi"]
+description = "Terraform for unifi/ (UniFi + Pi-hole credentials from Vault secret/unifi-terraform/)"
+dir = "unifi"
+# Shared with ~/github/UnifiTerraform, which owns these credentials.
+run = "{{config_root}}/scripts/vault-tfvars secret/unifi-terraform/controller secret/unifi-terraform/pihole -- terraform"
+
+[tasks."tf:aws-backup"]
+description = "Terraform for terraform-aws-backup/ (AWS credentials from ~/.aws)"
+dir = "terraform-aws-backup"
+run = "terraform"
+
+[tasks."tf:aws-kms"]
+description = "Terraform for terraform-aws-kms/ (AWS credentials from ~/.aws)"
+dir = "terraform-aws-kms"
+run = "terraform"
+
+# Golden image, e.g. `mise run packer -- build .`. Packer takes the same
+# Proxmox token as Terraform, split into its id and secret halves.
+[tasks.packer]
+description = "Packer for packer/ (Proxmox token from Vault secret/k8s-homelab/proxmox)"
+dir = "packer"
+run = """
+set -e
+token=$(vault kv get -field=proxmox_api_token secret/k8s-homelab/proxmox)
+export PKR_VAR_proxmox_api_token_id="${token%%=*}" PKR_VAR_proxmox_api_token_secret="${token#*=}"
+export PKR_VAR_ssh_public_key="$TF_VAR_ssh_public_key"
+packer
+"""
