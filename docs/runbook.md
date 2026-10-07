@@ -619,7 +619,8 @@ vault write auth/oidc/role/admin \
   bound_claims='{"email":"jacobmbanghart@gmail.com"}' \
   oidc_scopes="email,profile" \
   policies="admin" \
-  ttl="1h"
+  token_ttl="12h" \
+  token_max_ttl="24h"
 ```
 
 `bound_claims` is a map-type field, and passing it as an inline
@@ -639,12 +640,20 @@ cat > /tmp/admin-role.json <<'EOF'
   "bound_claims": {"email": "jacobmbanghart@gmail.com"},
   "oidc_scopes": ["email", "profile"],
   "policies": ["admin"],
-  "ttl": "1h"
+  "token_ttl": "12h",
+  "token_max_ttl": "24h"
 }
 EOF
 vault write auth/oidc/role/admin @/tmp/admin-role.json
 rm /tmp/admin-role.json
 ```
+
+Session length: admin tokens last 12h and can be renewed
+(`vault token renew`) up to 24h total, then need a fresh login. Raised
+from 1h on 2026-10-06. To change it on the live role without touching
+the other fields: `vault write auth/oidc/role/admin token_ttl=12h
+token_max_ttl=24h` (the role update only changes the fields you pass).
+The oidc mount's own max is 32d, so the role is the only limit.
 
 Note: Vault's UI supports configuring the `oidc` auth method itself
 (Access → Auth Methods → oidc → Configuration) but has no Roles tab for
