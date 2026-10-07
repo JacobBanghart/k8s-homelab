@@ -70,6 +70,17 @@ resource "proxmox_virtual_environment_container" "devbox" {
     nesting = true
   }
 
+  # /dev/kvm for the Android emulator (nijii-app's Maestro and screenshot tests).
+  # gid 992 is the container's kvm group; jqwop joins it inside the CT.
+  # Proxmox only lets root@pam set device passthrough, and the provider uses an API
+  # token, so this was applied with `pct set 201 -dev0 /dev/kvm,gid=992,mode=0660`.
+  # Declaring it here keeps the plan clean; changing it needs the same root step.
+  device_passthrough {
+    path = "/dev/kvm"
+    gid  = 992
+    mode = "0660"
+  }
+
   operating_system {
     template_file_id = "${var.storage_pool}:vztmpl/ubuntu-26.04-standard_26.04-1_amd64.tar.zst"
     type             = "ubuntu"
