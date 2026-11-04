@@ -189,7 +189,22 @@ Replacement:
   nothing.
 - Prove one restore of a small PVC before Phase 6.
 
-## Phase 6: decommission (after ~1–2 weeks stable)
+## Phase 6: decommission (mostly DONE 2026-11-03)
+
+**Status 2026-11-03.** Steps 1–4 are done, with these deviations from the plan:
+- **Templates kept.** 9000/9001 are still around; `single_node.template_vm_id` references 9001.
+- **ARC capped at 16 GiB, not 4.** The devbox (CT 201) rootfs moved onto `fast` too: a 1000G
+  subvol, up from a 300G raw image that had filled up. LXC file I/O on ZFS goes through ARC,
+  so it needs more than the VM zvols do. `primarycache=metadata` is set on 9121's zvols only.
+- **Pool created with** `-O atime=off -O xattr=sa -O acltype=posixacl` as well. It's mounted
+  at `/fast` and added as `zfspool` storage `fast` (sparse).
+- **9121's cloud-init drive is still on etcd-fast.** The provider can only move it with the
+  VM powered off. Flip `single_node.cloudinit_datastore_id` to `fast` at the next planned
+  reboot, before step 5.
+
+Still open: step 5 (the second mirror), the step-6 repo and Obsidian cleanup, sanoid/syncoid
+(Phase 5), and removing the failed ceph-mon/mgr units on prox.
+
 
 1. Terraform: remove `masters`/`workers` maps → destroys 9101–9103,
    9111–9113. Also delete templates 9000/9001 if unused.

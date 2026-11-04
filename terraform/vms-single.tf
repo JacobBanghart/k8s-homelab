@@ -66,7 +66,7 @@ resource "proxmox_virtual_environment_vm" "single" {
   }
 
   initialization {
-    datastore_id = var.single_node.datastore_id
+    datastore_id = var.single_node.cloudinit_datastore_id
 
     ip_config {
       ipv4 {

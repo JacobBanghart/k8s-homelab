@@ -15,10 +15,6 @@
 # Sizing: an LXC's cores and memory are caps, not reservations -- an idle box
 # costs ~1-2 GiB. 128 cores is a full socket's worth of threads; a big parallel
 # build can contend with k8s-homelab-0 (9121) and CT 200 while it runs.
-#
-# Apply with -target: the VM resources in this state have drifted (the cluster
-# was collapsed to 9121 outside Terraform), and a plain apply would restart
-# and regrow the stopped 9101-9113.
 
 variable "devbox" {
   description = "Remote T3 Code / Claude Code dev box"
@@ -29,14 +25,21 @@ variable "devbox" {
     cores  = number
     memory = number # MiB
     disk   = number # GiB
+    # Rootfs moved from the `nvme` dir pool (raw image on a loop device) to the
+    # `fast` ZFS mirror with `pct move-volume` on 2026-11-03, because parallel
+    # Rust worktrees (~10 GiB of target/ each) filled 300G and the T3 server's
+    # SQLite then failed every run. On ZFS it's a subvol, so `disk` is just a
+    # quota: raise it here and apply (in place, no restart).
+    datastore = string
   })
   default = {
-    vm_id  = 201
-    ip     = "10.1.0.230"
-    mac    = "BC:24:11:10:02:30"
-    cores  = 128
-    memory = 49152
-    disk   = 300
+    vm_id     = 201
+    ip        = "10.1.0.230"
+    mac       = "BC:24:11:10:02:30"
+    cores     = 128
+    memory    = 49152
+    disk      = 1000
+    datastore = "fast"
   }
 }
 
@@ -60,7 +63,7 @@ resource "proxmox_virtual_environment_container" "devbox" {
   }
 
   disk {
-    datastore_id = var.storage_pool
+    datastore_id = var.devbox.datastore
     size         = var.devbox.disk
   }
 
