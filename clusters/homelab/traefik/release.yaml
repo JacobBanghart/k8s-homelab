@@ -55,14 +55,52 @@ spec:
         middlewares:
           - name: basic-auth
 
+    # Two address families (2026-11-21):
+    #   - web/websecure on 10.4.0.200: INTERNAL. Reached from the LAN and
+    #     the tailnet (tsrouter advertises 10.4.0.0/24). The router does not
+    #     forward to it. asDefault, so any route that doesn't name an
+    #     entrypoint (plain Ingress objects, IngressRoutes without
+    #     entryPoints) is private by default.
+    #   - publicweb/public on 10.4.0.203 (additionalServices.public below):
+    #     the only thing WAN 80/443 forwards to (UnifiTerraform
+    #     port_forwards.tf). A route is internet-facing only if it lists the
+    #     `public` entrypoint explicitly (Ingress: annotation
+    #     traefik.ingress.kubernetes.io/router.entrypoints: websecure,public).
+    # Before this split every route sat on the one forwarded entrypoint, so
+    # "internal" hostnames (Vault, Headlamp) answered from the internet to
+    # anyone who sent the Host header.
     ports:
       web:
+        asDefault: true
         http:
           redirections:
             entryPoint:
               to: websecure
               scheme: https
       websecure:
+        asDefault: true
+        http:
+          tls:
+            enabled: true
+      publicweb:
+        port: 9080
+        exposedPort: 80
+        expose:
+          default: false
+          public: true
+        protocol: TCP
+        http:
+          redirections:
+            entryPoint:
+              to: public
+              scheme: https
+      public:
+        port: 9443
+        exposedPort: 443
+        expose:
+          default: false
+          public: true
+        protocol: TCP
         http:
           tls:
             enabled: true
@@ -75,6 +113,12 @@ spec:
     service:
       annotations:
         metallb.io/loadBalancerIPs: "10.4.0.200"
+      additionalServices:
+        public:
+          spec:
+            type: LoadBalancer
+          annotations:
+            metallb.io/loadBalancerIPs: "10.4.0.203"
 
     deployment:
       # Single node: the 3-replica/drain rationale above no longer applies.
