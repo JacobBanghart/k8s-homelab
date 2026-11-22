@@ -84,6 +84,23 @@ resource "proxmox_virtual_environment_container" "devbox" {
     mode = "0660"
   }
 
+  # GT 1030 render node (host driver: nouveau), for GPU tests in Docker such as
+  # Quickshell VRAM measurement. gid 991 is the container's render group.
+  # Applied as root with `pct set 201 -dev1 /dev/dri/renderD128,gid=991,mode=0660`
+  # (hot-plugged, no restart), like dev0 above.
+  device_passthrough {
+    path = "/dev/dri/renderD128"
+    gid  = 991
+    mode = "0660"
+  }
+
+  # TUN for tailscaled (kernel networking, joined to Headscale as `devbox`).
+  # Applied live with `pct set 201 -dev2 /dev/net/tun,mode=0666`.
+  device_passthrough {
+    path = "/dev/net/tun"
+    mode = "0666"
+  }
+
   operating_system {
     template_file_id = "${var.storage_pool}:vztmpl/ubuntu-26.04-standard_26.04-1_amd64.tar.zst"
     type             = "ubuntu"
