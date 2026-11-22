@@ -34,6 +34,14 @@ locals {
     # on purpose: no public Cloudflare record, and the IngressRoute carries an
     # IPAllowList middleware, since the app has no login.
     k8s_homelab_lsat = { domain = "lsat.jacobbanghart.com", ip = "10.4.0.200" }
+
+    # Private since 2026-11-21: no public Cloudflare record (external-dns
+    # controller "none"), routed only on Traefik's internal entrypoint. LAN
+    # clients resolve them here; tailnet clients reach this Pi-hole through
+    # Headscale split DNS (flux repo headscale/config.yaml).
+    k8s_homelab_dashboard = { domain = "dashboard.jacobbanghart.com", ip = "10.4.0.200" }
+    k8s_homelab_passwords = { domain = "passwords.jacobbanghart.com", ip = "10.4.0.200" }
+    k8s_homelab_home      = { domain = "home.jacobbanghart.com", ip = "10.4.0.200" }
   }
 }
 

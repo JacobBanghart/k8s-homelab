@@ -52,14 +52,12 @@ metadata:
     # password was too much to leave on the internet. The route sits only on
     # `websecure`, which is now the internal entrypoint (10.4.0.200, LAN +
     # tailnet; see traefik/release.yaml). The name stays because Headlamp's
-    # OIDC callbackURL is fixed to it (release.yaml). Its public A record
-    # points at the internal VIP, so it resolves anywhere but only connects
-    # from the LAN or the tailnet (tsrouter advertises 10.4.0.0/24).
-    #
-    # An IngressRoute carries no LoadBalancer status, so external-dns has no
-    # address to derive a target from and drops the hostname before
-    # --default-targets is consulted. The target must be stated explicitly.
-    external-dns.alpha.kubernetes.io/target: "10.4.0.200"
+    # OIDC callbackURL is fixed to it (release.yaml). No public DNS record
+    # (controller "none"; a private target can't be published because
+    # --force-default-targets overrides it). Pi-hole resolves it to
+    # 10.4.0.200 (unifi/pihole_dns.tf); tailnet clients reach Pi-hole via
+    # Headscale split DNS (flux repo headscale/config.yaml).
+    external-dns.alpha.kubernetes.io/controller: "none"
 spec:
   entryPoints:
     - websecure
