@@ -350,13 +350,16 @@ spec:
           - secretName: grafana-tls
             hosts:
               - grafana.k8s-homelab.jacobbanghart.com
+      # Grafana's working set sits at 235-250Mi (7d median, 2026-11), so the old
+      # 256Mi limit got it OOM-killed ~7 times in two weeks (37 restarts).
+      # Request = its normal use; the limit leaves room for dashboard spikes.
       resources:
         requests:
           cpu: "50m"
-          memory: "128Mi"
+          memory: "256Mi"
         limits:
           cpu: "200m"
-          memory: "256Mi"
+          memory: "512Mi"
       additionalDataSources:
         - name: Loki
           type: loki
