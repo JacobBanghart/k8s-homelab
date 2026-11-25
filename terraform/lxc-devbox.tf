@@ -2,8 +2,8 @@
 # devbox -- remote T3 Code / Claude Code workstation LXC (2026-09-26)
 # =============================================================================
 # Not part of the k8s cluster -- lives here only because this is the module
-# that already holds the Proxmox provider, token and state (same as
-# lxc-ryan-minecraft.tf). Supersedes the VLAN 30 "agent sandbox" design in
+# that already holds the Proxmox provider, token and state (as Ryan's CT 200,
+# lxc-ryan-minecraft.tf, did until it was deleted 2026-11-25). Supersedes the VLAN 30 "agent sandbox" design in
 # docs/agent-sandbox.md: this box is on the PRIMARY LAN on purpose, so it can
 # do infra work (Proxmox API, UniFi, kubectl) the same as the desktop. The
 # trade-off is that a runaway agent here can reach everything the desktop can.
